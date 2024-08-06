@@ -1,2 +1,2 @@
-# qemu-nc
+# x64nc
 QEMU native compatible solution.
