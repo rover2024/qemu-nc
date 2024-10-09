@@ -1,7 +1,7 @@
-project(loaderapi)
+project(x64nc-hostrt)
 
 file(GLOB _src *.c *.cpp)
-add_library(${PROJECT_NAME} STATIC ${_src})
+add_library(${PROJECT_NAME} SHARED ${_src})
 
 target_include_directories(
     ${PROJECT_NAME} PUBLIC "$<BUILD_INTERFACE:${X64NC_SOURCE_DIR}/include>"

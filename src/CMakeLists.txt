@@ -1,1 +1,3 @@
-add_subdirectory(loaderapi)
+add_subdirectory(guestrt)
+
+add_subdirectory(hostrt)
