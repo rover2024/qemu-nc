@@ -1,5 +1,5 @@
-#ifndef HOSTAPI_H
-#define HOSTAPI_H
+#ifndef X64NC_HOSTAPI_H
+#define X64NC_HOSTAPI_H
 
 #include <x64nc/x64nc_global.h>
 
@@ -8,14 +8,15 @@ extern "C" {
 #endif
 
 // Host Api
-X64NC_EXPORT void CallHostExecuteCallback(void *callback, void *args, void *ret);
+X64NC_EXPORT void QEMU_NC_CallHostExecuteCallback(void *thunk, void *callback, void *args,
+                                                  void *ret);
 
-X64NC_EXPORT void *GetHostExecuteCallback();
+X64NC_EXPORT void *QEMU_NC_GetHostExecuteCallback();
 
-X64NC_EXPORT void *LookUpGuestThunk(const char *sign);
+X64NC_EXPORT void *QEMU_NC_LookUpGuestThunk(const char *sign);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // HOSTAPI_H
+#endif // X64NC_HOSTAPI_H

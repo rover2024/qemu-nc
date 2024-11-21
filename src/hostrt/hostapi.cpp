@@ -43,11 +43,14 @@ static uintptr_t host_audit_symbind64(Elf64_Sym *sym, unsigned int ndx, uintptr_
     return sym->st_value;
 }
 
-extern "C" X64NC_EXPORT void _SetHostExecuteCallback(void *callback) {
+// --------------------------------------------------------------------------------------
+// QEMU emulator will call the following functions
+
+extern "C" X64NC_EXPORT void _QEMU_NC_SetHostExecuteCallback(void *callback) {
     m_hec = reinterpret_cast<X64NC_HostExecuteCallback>(callback);
 }
 
-extern "C" X64NC_EXPORT void _HandleExtraGuestCall(int type, void **args) {
+extern "C" X64NC_EXPORT void _QEMU_NC_HandleExtraGuestCall(int type, void **args) {
     switch (type) {
         case X64NC_LA_ObjOpen: {
             *(unsigned int *) args[4] = host_audit_objopen((link_map *) args[0], (Lmid_t) args[1],
@@ -81,18 +84,27 @@ extern "C" X64NC_EXPORT void _HandleExtraGuestCall(int type, void **args) {
     }
 }
 
-void CallHostExecuteCallback(void *thunk, void *callback, void *args, void *ret) {
+// --------------------------------------------------------------------------------------
+
+
+// --------------------------------------------------------------------------------------
+// Host libraries will call the following functions
+
+void QEMU_NC_CallHostExecuteCallback(void *thunk, void *callback, void *args,
+                                                  void *ret) {
     m_hec(thunk, callback, args, ret);
 }
 
-void *GetHostExecuteCallback() {
+void *QEMU_NC_GetHostExecuteCallback() {
     return (void *) m_hec;
 }
 
-void *LookUpGuestThunk(const char *sign) {
+void *QEMU_NC_LookUpGuestThunk(const char *sign) {
     auto it = m_thunks.find(sign);
     if (it == m_thunks.end()) {
         return nullptr;
     }
     return it->second;
 }
+
+// --------------------------------------------------------------------------------------

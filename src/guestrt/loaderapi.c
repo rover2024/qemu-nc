@@ -84,3 +84,9 @@ void x64nc_RegisterCallThunk(const char *signature, void *func) {
     syscall3(X64NC_MAGIC_SYSCALL_INDEX, _reinterpret_cast(void *) X64NC_RegisterCallThunk,
              _const_cast(char *)(signature), func);
 }
+
+void x64nc_ExtractVariadicList(const char *fmt, void **data_buf, char *types_buf) {
+}
+
+void x64nc_ExtractVariadicList_ScanF(const char *fmt, void **data_buf, char *types_buf) {
+}
