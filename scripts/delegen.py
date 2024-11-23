@@ -1,8 +1,10 @@
-# Usage: python delegen.py <symbols file> <header file> [-I<dir>] [-D<FOO=bar>] [-F <extra flags>] [-o <output dir>]
+# Usage: python delegen.py <symbols file> <header file> <library_name>
+#                          [-I<dir>] [-D<FOO=bar>] [-F <extra flags>] [-o <output dir>]
 
 # Generates "x64nc_declarations.h",
 #           "x64nc_delegate_guest_definitions.cpp"
 #           "x64nc_delegate_host_definitions.cpp"
+#           "<library_name>_callbacks.txt"
 
 from __future__ import annotations
 
@@ -25,8 +27,7 @@ from clang.cindex import SourceLocation
 from typing import Optional
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from python.text import read_list_file_as_set
-from python.text import replace_file_placeholders
+from python.text import *
 import python.clang as cl
 
 
@@ -81,6 +82,18 @@ def main():
             functions[c.spelling] = c
             symbols_remaining.remove(c.spelling)
     
+    # Find function prototypes
+    callback_types: list[Type] = []
+    callback_type_spellings: set[str] = set()
+    for type in all_types:
+        type: Type = cl.primordial_type(type).get_canonical()
+        spelling: str = type.get_canonical().spelling
+        if type.kind in [TypeKind.FUNCTIONPROTO, TypeKind.FUNCTIONNOPROTO]:
+            if spelling in callback_type_spellings:
+                continue
+            callback_types.append(type)
+            callback_type_spellings.add(spelling)
+
     # Generate declarations file
     with io.StringIO() as f:
         lines: list[str] = []
@@ -89,62 +102,89 @@ def main():
                 lines.append(line.strip())
         
         # Header content
-        print("extern \"C\" {", file=f)
+        print("X64NC_EXTERN_C_BEGIN", file=f)
         for line in lines:
             print(line, file=f)
-        print("}\n", file=f)
+        print("X64NC_EXTERN_C_END", file=f)
+        print("\n", file=f)
 
         # Functions
-        f.write('#define X64NC_API_FOREACH_FUNCTION(F)')
+        f.write('#define X64NC_API_FOREACH(F)')
         for fname, _ in functions.items():
             f.write(f' \\\n    F({fname})')
-        f.write('\n')
-        
+        f.write('\n\n')
+
+        # Callbacks
+        f.write('#define X64NC_CALLBACK_FOREACH(F)')
+        for i in range(0, len(callback_types)):
+            f.write(f' \\\n    F(\"{callback_types[i].get_canonical().spelling}\", __QEMU_NC_CallbackThunk_{i + 1})')
+        f.write('\n\n')
+
         declaration_file_content = f.getvalue()
     
     # Generate guest file
     with io.StringIO() as f:
         for fname, c in functions.items():
-            ftype: Type = c.type
-            arg_list: list[tuple[str, str]] = []
-            i = 1
-            for arg in c.get_arguments():
-                arg_list.append((cl.to_type_str(arg.type), f'_arg{i}'))
-                i += 1
-            
+            type: Type = c.type
             return_type_str = cl.to_type_str(c.result_type)
-            arg_list_str = str(', ').join([f'{t[0]} {t[1]}' for t in arg_list])
-            if ftype.is_function_variadic():
+            args:list[Cursor] = list(c.get_arguments())
+            arg_list_str = str(', ').join([f"{cl.to_type_str(args[i].type)} {f'_arg{i + 1}'}" for i in range(0, len(args))])
+            
+            if type.is_function_variadic():
                 print(f"{return_type_str} {fname} ({arg_list_str}, ...)", file=f)
             else:
                 print(f"{return_type_str} {fname} ({arg_list_str})", file=f)
             print("{", file=f)
             
-            args_arrange = ", ".join(f"_arg{i}" for i in range(1, len(arg_list) + 1))
-            print(f'    auto _args = get_addresses_of_parameters({args_arrange});', file=f)
+            args_arrange = ", ".join(f"_R(_arg{i + 1})" for i in range(0, len(args)))
+            print(f'    void *_args[] = {{{args_arrange}}};', file=f)
             
             if return_type_str != 'void':
-                print(f"    {return_type_str} _ret = {{}};", file=f)
-                print(f'    x64nc_CallNativeProc(DynamicApis::p{c.spelling}, _args.data(), &_ret);', file=f)
+                print(f"    {return_type_str} _ret;", file=f)
+                print(f'    x64nc_CallNativeProc(DynamicApis_p{c.spelling}, _args, &_ret);', file=f)
                 print(f'    return _ret;', file=f)
             else:
-                print(f'    x64nc_CallNativeProc(DynamicApis::p{c.spelling}, _args.data(), nullptr);', file=f)
+                print(f'    x64nc_CallNativeProc(DynamicApis_p{c.spelling}, _args, NULL);', file=f)
 
             print('}\n', file=f)
 
         for symbol in symbols_remaining:
             print(f'// No definition found for {symbol}', file=f)
         
+        print("\n", file=f)
+
+        for i in range(0, len(callback_types)):
+            type: Type = callback_types[i]
+            return_type_str = cl.to_type_str(type.get_result())
+            arg_types:list[Type] = list(type.argument_types())
+
+            print(f"static void __QEMU_NC_CallbackThunk_{i + 1}(void *_callback, void *_args[], void *_ret)", file=f)
+            print("{", file=f)
+            if return_type_str != 'void':
+                print(f'    *(__typeof__({return_type_str}) *) _ret =', file=f)
+            arg_list_str = str(', ').join([f"*(__typeof__({cl.to_type_str(arg_types[i])}) *) {f'_args[{i}]'}" for i in range(0, len(arg_types))])
+            print(f'    ((__typeof__({type.get_canonical().spelling}) *) _callback) ({arg_list_str});', file=f)
+            print('}\n', file=f)
+        
         guest_delegate_file_content = f.getvalue()
     
     # Generate host file
     with io.StringIO() as f:
+        print('X64NC_EXTERN_C_BEGIN', file=f)
+        print('\n', file=f)
         for fname, c in functions.items():
-            sr: SourceRange = c.extent
-            print(f"extern \"C\" __attribute__((visibility(\"default\"))) void my_{fname}(void *_args, void *_ret)", file=f)
+            return_type_str = cl.to_type_str(c.result_type)
+            args:list[Cursor] = list(c.get_arguments())
+            
+            print(f"X64NC_DECL_EXPORT void my_{fname}(void *_args[], void *_ret)", file=f)
             print("{", file=f)
-            print(f"call_function2(DynamicApis::p{fname}, (void **) _ret, _args);", file=f)
+            if return_type_str != 'void':
+                print(f'    *(__typeof__({return_type_str}) *) _ret =', file=f)
+            arg_list_str = str(', ').join([f"*(__typeof__({cl.to_type_str(args[i].type)}) *) {f'_args[{i}]'}" for i in range(0, len(args))])
+            print(f'    DynamicApis_p{fname}({arg_list_str});', file=f)
             print('}\n', file=f)
+        print('\n', file=f)
+        print('X64NC_EXTERN_C_END', file=f)
         
         host_delegate_file_content = f.getvalue()
 
@@ -152,14 +192,17 @@ def main():
     if not os.path.exists(output_file_directory):
         os.makedirs(output_file_directory)
 
-    with open(os.path.join(output_file_directory, 'x64nc_declarations.h'), mode='w') as f:
+    with open(os.path.join(output_file_directory, '_x64nc_declarations.h'), mode='w') as f:
         f.write(declaration_file_content)
 
-    with open(os.path.join(output_file_directory, 'x64nc_delegate_guest_definitions.cpp'), mode='w') as f:
+    with open(os.path.join(output_file_directory, '_x64nc_delegate_guest_definitions.c'), mode='w') as f:
         f.write(guest_delegate_file_content)
 
-    with open(os.path.join(output_file_directory, 'x64nc_delegate_host_definitions.cpp'), mode='w') as f:
+    with open(os.path.join(output_file_directory, '_x64nc_delegate_host_definitions.c'), mode='w') as f:
         f.write(host_delegate_file_content)
+
+    with open(os.path.join(output_file_directory, f'{library_name}_callbacks.txt'), mode='w') as f:
+        f.write("\n".join(callback_type_spellings))
 
     # Copy templates
     files = [os.path.join(Global.resource_dir, file) for file in os.listdir(Global.resource_dir)]

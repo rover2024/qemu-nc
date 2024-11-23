@@ -23,6 +23,7 @@ from typing import Optional
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import python.clang as cl
+from python.text import *
 
 
 class Global:
@@ -57,6 +58,8 @@ def clang_reveal_call_expr(c: Cursor) -> tuple[Optional[Cursor], Type]:
         elif c.kind in [CursorKind.MEMBER_REF_EXPR, CursorKind.DECL_REF_EXPR]:
             # get reference
             c = c.referenced
+            break
+        elif c.kind in [CursorKind.CSTYLE_CAST_EXPR]:
             break
         else:
             raise TypeError(f"Unexpected cursor kind: {c.kind}")
@@ -136,13 +139,13 @@ def main():
 
     for i in range(0, len(function_pointers)):
         c:Cursor = function_pointers[len(function_pointers) - 1 - i]
+        # print(f'[{i + 1}]')
+        # cl.traverse_cursor(c, 0)
+        # print(" ")
+
         reveal_result = clang_reveal_call_expr(c)
         cursor: Optional[Cursor] = reveal_result[0]
         type: Type = reveal_result[1]
-
-        print(f'[{i + 1}] {type.get_canonical().spelling}')
-        cl.traverse_cursor(c, 0)
-        print(" ")
 
         if cursor and cursor.kind == CursorKind.FUNCTION_DECL:
             continue
@@ -192,7 +195,7 @@ def main():
             cg: CheckGuardData = check_guards[idx]
             print(f'static void *{cg.name}_Thunk;', file=f)
             print(f'static const char {cg.name}_Signature[]=\"{signature}\";', file=f)
-        print('void __attribute__((constructor)) __QEMU_NC_Initialize()', file=f)
+        print(f'void X64NC_CONSTRUCTOR __QEMU_NC_Initialize()', file=f)
         print('{', file=f)
         print('    _QEMU_NC_HostExecuteCallback = (QEMU_NC_HostExecuteCallbackType) QEMU_NC_GetHostExecuteCallback();', file=f)
         for _, idx in existing_signatures.items():
@@ -205,15 +208,9 @@ def main():
         print('}\n', file=f)
         for signature, idx in existing_signatures.items():
             cg: CheckGuardData = check_guards[idx]
-            arg_list: list[tuple[str, str]] = []
-            i = 1
-            arg_type: Type
-            for arg_type in cg.type.argument_types():
-                arg_list.append((cl.to_type_str(arg_type), f'_arg{i}'))
-                i += 1
-            
             return_type_str = cl.to_type_str(cg.type.get_result())
-            arg_list_str = str(', ').join([f'{t[0]} {t[1]}' for t in arg_list])
+            arg_types:list[Type] = list(cg.type.argument_types())
+            arg_list_str = str(', ').join([f"{cl.to_type_str(arg_types[i])} {f'_arg{i + 1}'}" for i in range(0, len(arg_types))])
             
             decl = f"{return_type_str} {cg.name} ({cl.to_type_str(cg.type)} *_callback, {arg_list_str}"
             if cg.type.is_function_variadic():
@@ -226,10 +223,10 @@ def main():
             print("{", file=f)
             print('    if ((uintptr_t) _callback > (uintptr_t) _QEMU_NC_HostExecuteCallback)', file=f)
             print('    {', file=f)
-            args_arrange = ", ".join(f"_arg{i}" for i in range(1, len(arg_list) + 1))
+            args_arrange = ", ".join(f"_arg{i + 1}" for i in range(0, len(arg_types)))
             print(f'        return _callback({args_arrange});', file=f)
             print('    }', file=f)
-            args_arrange = ", ".join(f"&_arg{i}" for i in range(1, len(arg_list) + 1))
+            args_arrange = ", ".join(f"&_arg{i + 1}" for i in range(0, len(arg_types)))
             print(f'    void *_args[] = {{{args_arrange}}};', file=f)
             if return_type_str != 'void':
                 print(f'    {return_type_str} _ret;', file=f)
@@ -249,14 +246,7 @@ def main():
             
             arg_type: Type
             for arg_type in cg.type.argument_types():
-                while True:
-                    if arg_type.kind == TypeKind.POINTER:
-                        arg_type = arg_type.get_pointee()
-                        continue
-                    if arg_type.kind == TypeKind.CONSTANTARRAY:
-                        arg_type = arg_type.element_type
-                        continue
-                    break
+                arg_type = cl.primordial_type(arg_type)
                 if arg_type.kind == TypeKind.RECORD:
                     canonical_spelling: str = arg_type.get_canonical().spelling
                     if canonical_spelling in existing_records:

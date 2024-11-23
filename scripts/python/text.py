@@ -1,4 +1,8 @@
+from __future__ import annotations
+
 import re
+
+from typing import Optional
 
 def read_list_file_as_set(filename: str) -> set[str]:
     with open(filename) as file:
@@ -13,8 +17,8 @@ def replace_file_placeholders(file_path: str, replacements: dict[str, str], outp
     with open(file_path, 'r', encoding='utf-8') as file:
         content = file.read()
     
-    def replacement(match):
-        key = match.group(1)  # 提取 XXX
+    def replacement(match: re.Match):
+        key = match.group(1)  # Extract XXX
         return replacements.get(key, "")
     
     updated_content = re.sub(r'@([\w_]+)@', replacement, content)

@@ -11,6 +11,11 @@ from clang.cindex import TypeKind
 from clang.cindex import SourceRange
 from clang.cindex import SourceLocation
 
+class StringLiteral:
+    extern_c: str = "extern \"C\""
+    attribute_constructor = "__attribute__((constructor))"
+    attribute_visible = "__attribute__((visibility(\"default\")))"
+
 def scan_type(type: Type, visited_types: list[Type], visited_type_spellings: set[str]):
     canonical_type: Type = type.get_canonical()
     if canonical_type.spelling in visited_type_spellings:
@@ -55,12 +60,20 @@ def traverse_cursor(c: Cursor, indent: int):
 
 
 def is_function_pointer(type: Type) -> bool:
-    canonical_type: Type = type.get_canonical()
-    if canonical_type.kind == TypeKind.POINTER:
-        return is_function_pointer(canonical_type.get_pointee())
-    elif canonical_type.kind == TypeKind.CONSTANTARRAY:
-        return is_function_pointer(canonical_type.element_type)
-    return canonical_type.kind == TypeKind.FUNCTIONPROTO or canonical_type.kind == TypeKind.FUNCTIONNOPROTO
+    return primordial_type(type).kind in [TypeKind.FUNCTIONPROTO, TypeKind.FUNCTIONNOPROTO]
+
+
+def primordial_type(type: Type) -> Type:
+    while True:
+        type = type.get_canonical()
+        if type.kind == TypeKind.POINTER:
+            type = type.get_pointee()
+            continue
+        if type.kind == TypeKind.CONSTANTARRAY:
+            type = type.element_type
+            continue
+        break
+    return type
 
 
 def to_type_str(type: Type) -> str:

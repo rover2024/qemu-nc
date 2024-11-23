@@ -43,7 +43,7 @@ char *x64nc_GetErrorMessage() {
     return ret;
 }
 
-int x64nc_CallNativeProc(void *func, void *args, void *ret) {
+int x64nc_CallNativeProc(void *func, void *args[], void *ret) {
     typedef void (*Thunk)(void * /*callback*/, void * /*args*/, void * /*ret*/);
 
     void *a[] = {
