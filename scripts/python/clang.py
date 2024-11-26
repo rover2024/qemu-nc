@@ -76,11 +76,66 @@ def primordial_type(type: Type) -> Type:
     return type
 
 
-def to_type_str(type: Type) -> str:
-    if is_function_pointer(type):
-        type_str = f'__typeof__({type.get_canonical().spelling})'
-    elif type.kind == TypeKind.CONSTANTARRAY:
-        type_str = type.element_type.get_canonical().spelling + " *"
-    else:
-        type_str = type.get_canonical().spelling
-    return type_str
+class types:
+    @staticmethod
+    def reduced(type: Type) -> str:
+        type = type.get_canonical()
+        if type.kind in [ TypeKind.CHAR_U, TypeKind.UCHAR, TypeKind.CHAR_S, TypeKind.SCHAR]:
+            return 'char'
+        elif type.kind in [ TypeKind.INT, TypeKind.UINT ]:
+            return 'int'
+        elif type.kind in [ TypeKind.LONG, TypeKind.LONGLONG, TypeKind.ULONG, TypeKind.ULONGLONG]:
+            return 'long'
+        elif type.kind in [ TypeKind.POINTER, TypeKind.FUNCTIONPROTO, TypeKind.FUNCTIONNOPROTO, TypeKind.CONSTANTARRAY ]:
+            return 'void *'
+            # return 'long'
+        return types.remove_cv(type.spelling)
+    
+    @staticmethod
+    def remove_cv(s: str) -> str:
+        s = s.replace('const ', '')
+        s = s.replace('volatile ', '')
+        return s
+
+    @staticmethod
+    def to_str(type: Type) -> str:
+        type = type.get_canonical()
+        if is_function_pointer(type):
+            type_str = f'__typeof__({type.spelling})/*FP*/'
+        elif type.kind == TypeKind.CONSTANTARRAY:
+            type_str = types.to_str(type.element_type)
+            type_str += '*' if type_str[-1] == '*' else ' *'
+        else:
+            type_str = type.spelling
+        return type_str
+    
+    @staticmethod
+    def call_expr_to_str(c: Cursor, result_type: Type, reduce: bool = True) -> str:
+        """Returns the simplest spelling of a call expression."""
+        res = types.reduced(result_type) if reduce else types.to_str(result_type)
+        if res[-1] != '*':
+            res += ' '
+        res += '('
+        res += ', '.join([(types.reduced(arg.type) \
+                                if reduce else arg.type.get_canonical().spelling) \
+                                    for arg in c.get_arguments()])
+        res += ')'
+        return types.remove_cv(res) if reduce else res
+
+
+    @staticmethod
+    def func_type_to_str(type: Type, reduce: bool = True) -> str:
+        """Returns the simplest spelling of a fucntion proto type."""
+        res = types.reduced(type.get_result()) \
+            if reduce else types.reduced(type.get_result())
+        if res[-1] != '*':
+            res += ' '
+        res += '('
+        if type.kind == TypeKind.FUNCTIONPROTO:
+            res += ', '.join([(types.reduced(arg_type) \
+                                if reduce else arg_type.get_canonical().spelling) \
+                                    for arg_type in type.argument_types() ])
+            if type.is_function_variadic():
+                res += ', ...'
+        res += ')'
+        return types.remove_cv(res) if reduce else res

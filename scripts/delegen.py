@@ -42,7 +42,7 @@ def main():
     parser.add_argument('-D', type=str, action='append', metavar="<definition>", default=[], help='Macro definitions.')
     parser.add_argument('-F', type=str, action='append', metavar="<extra flags>", default=[], help='Extra flags for the preprocessor.')
     parser.add_argument('-o', type=str, metavar="<out>", required=False, help='Output directory name')
-    parser.add_argument('symbols_file', type=str, help='File with symbols.')
+    parser.add_argument('symbols_file', type=str, help='File contains list of symbols.')
     parser.add_argument('header_file', type=str, help='Header file to parse.')
     parser.add_argument('library_name', type=str, help='Library name.')
     args = parser.parse_args()
@@ -87,8 +87,8 @@ def main():
     callback_type_spellings: set[str] = set()
     for type in all_types:
         type: Type = cl.primordial_type(type).get_canonical()
-        spelling: str = type.get_canonical().spelling
         if type.kind in [TypeKind.FUNCTIONPROTO, TypeKind.FUNCTIONNOPROTO]:
+            spelling: str = cl.types.func_type_to_str(type, True)
             if spelling in callback_type_spellings:
                 continue
             callback_types.append(type)
@@ -117,7 +117,7 @@ def main():
         # Callbacks
         f.write('#define X64NC_CALLBACK_FOREACH(F)')
         for i in range(0, len(callback_types)):
-            f.write(f' \\\n    F(\"{callback_types[i].get_canonical().spelling}\", __QEMU_NC_CallbackThunk_{i + 1})')
+            f.write(f' \\\n    F(\"{cl.types.func_type_to_str(callback_types[i])}\", __QEMU_NC_CallbackThunk_{i + 1})')
         f.write('\n\n')
 
         declaration_file_content = f.getvalue()
@@ -126,9 +126,9 @@ def main():
     with io.StringIO() as f:
         for fname, c in functions.items():
             type: Type = c.type
-            return_type_str = cl.to_type_str(c.result_type)
+            return_type_str = cl.types.to_str(c.result_type)
             args:list[Cursor] = list(c.get_arguments())
-            arg_list_str = str(', ').join([f"{cl.to_type_str(args[i].type)} {f'_arg{i + 1}'}" for i in range(0, len(args))])
+            arg_list_str = str(', ').join([f"{cl.types.to_str(args[i].type)} {f'_arg{i + 1}'}" for i in range(0, len(args))])
             
             if type.is_function_variadic():
                 print(f"{return_type_str} {fname} ({arg_list_str}, ...)", file=f)
@@ -155,14 +155,14 @@ def main():
 
         for i in range(0, len(callback_types)):
             type: Type = callback_types[i]
-            return_type_str = cl.to_type_str(type.get_result())
+            return_type_str = cl.types.to_str(type.get_result())
             arg_types:list[Type] = list(type.argument_types())
 
             print(f"static void __QEMU_NC_CallbackThunk_{i + 1}(void *_callback, void *_args[], void *_ret)", file=f)
             print("{", file=f)
             if return_type_str != 'void':
                 print(f'    *(__typeof__({return_type_str}) *) _ret =', file=f)
-            arg_list_str = str(', ').join([f"*(__typeof__({cl.to_type_str(arg_types[i])}) *) {f'_args[{i}]'}" for i in range(0, len(arg_types))])
+            arg_list_str = str(', ').join([f"*(__typeof__({cl.types.to_str(arg_types[i])}) *) {f'_args[{i}]'}" for i in range(0, len(arg_types))])
             print(f'    ((__typeof__({type.get_canonical().spelling}) *) _callback) ({arg_list_str});', file=f)
             print('}\n', file=f)
         
@@ -173,14 +173,14 @@ def main():
         print('X64NC_EXTERN_C_BEGIN', file=f)
         print('\n', file=f)
         for fname, c in functions.items():
-            return_type_str = cl.to_type_str(c.result_type)
+            return_type_str = cl.types.to_str(c.result_type)
             args:list[Cursor] = list(c.get_arguments())
             
             print(f"X64NC_DECL_EXPORT void my_{fname}(void *_args[], void *_ret)", file=f)
             print("{", file=f)
             if return_type_str != 'void':
                 print(f'    *(__typeof__({return_type_str}) *) _ret =', file=f)
-            arg_list_str = str(', ').join([f"*(__typeof__({cl.to_type_str(args[i].type)}) *) {f'_args[{i}]'}" for i in range(0, len(args))])
+            arg_list_str = str(', ').join([f"*(__typeof__({cl.types.to_str(args[i].type)}) *) {f'_args[{i}]'}" for i in range(0, len(args))])
             print(f'    DynamicApis_p{fname}({arg_list_str});', file=f)
             print('}\n', file=f)
         print('\n', file=f)
