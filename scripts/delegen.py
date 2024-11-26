@@ -211,7 +211,10 @@ def main():
             shutil.copy(file, output_file_directory)
     
     # Rewrite Makefile
-    replace_file_placeholders(os.path.join(output_file_directory, 'Makefile'), { 'LIBRARY_NAME': library_name })
+    makefile_template = os.path.join(output_file_directory, 'Makefile.in')
+    replace_file_placeholders(makefile_template, \
+                              { 'LIBRARY_NAME': library_name }, os.path.join(output_file_directory, 'Makefile'))
+    os.remove(makefile_template)
 
 
 if __name__ == '__main__':
