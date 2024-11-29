@@ -11,7 +11,7 @@ extern "C" {
 
 X64NC_EXPORT void *x64nc_LoadLibrary(const char *path, int flags);
 
-X64NC_EXPORT void x64nc_FreeLibrary(void *handle);
+X64NC_EXPORT int x64nc_FreeLibrary(void *handle);
 
 X64NC_EXPORT void *x64nc_GetProcAddress(void *handle, const char *name);
 

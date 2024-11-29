@@ -1,5 +1,4 @@
-# Usage: python delegen.py <symbols file> <header file> <library_name>
-#                          [-I<dir>] [-D<FOO=bar>] [-F <extra flags>] [-o <output dir>]
+# Usage: python delegen.py <symbols file> <header file> <library_name> [-o <output dir>] [-X <clang args>]
 
 # Generates "x64nc_declarations.h",
 #           "x64nc_delegate_guest_definitions.cpp"
@@ -32,15 +31,12 @@ import python.clang as cl
 
 
 class Global:
-    clang_library_dir = "/lib/x86_64-linux-gnu/libclang-18.so"
     resource_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'delegen_resources')
 
 
 def main():
     parser = argparse.ArgumentParser(description='Generate stub functions for given symbols.')
-    parser.add_argument('-I', type=str, action='append', metavar="<dir>", default=[], help='Include path for headers.')
-    parser.add_argument('-D', type=str, action='append', metavar="<definition>", default=[], help='Macro definitions.')
-    parser.add_argument('-F', type=str, action='append', metavar="<extra flags>", default=[], help='Extra flags for the preprocessor.')
+    parser.add_argument('-X', nargs=argparse.REMAINDER, metavar="<clang args>", default=[], help='Extra arguments to pass to Clang.')
     parser.add_argument('-o', type=str, metavar="<out>", required=False, help='Output directory name')
     parser.add_argument('symbols_file', type=str, help='File contains list of symbols.')
     parser.add_argument('header_file', type=str, help='Header file to parse.')
@@ -48,7 +44,7 @@ def main():
     args = parser.parse_args()
 
     # Set the path to the clang library
-    Config.set_library_file(Global.clang_library_dir)
+    cl.setup()
 
     # Arguments
     symbols_file: str = args.symbols_file
@@ -61,12 +57,10 @@ def main():
     
     # Configure the index to parse the header files
     index = Index.create()
-    translation_unit = index.parse(header_file, args=['-x', 'c'] + 
-                                   [f'-I{path}' for path in args.I] + 
-                                   [f'-D{m}' for m in args.D] + args.F)
+    translation_unit = index.parse(header_file, args=['-x', 'c'] + args.X)
 
     # Collect function declarations and types
-    functions: dict[str, str] = {}
+    functions: dict[str, Cursor] = {}
     symbols_remaining = symbols_set
     all_types: list[Type] = []
     all_type_spellings: set[str] = set()
@@ -74,9 +68,9 @@ def main():
     for c in translation_unit.cursor.get_children():
         if c.kind == CursorKind.FUNCTION_DECL and c.spelling in symbols_remaining:
             # Scan types
-            cl.scan_type(c.result_type, all_types, all_type_spellings)
+            cl.scan_types(c.result_type, all_types, all_type_spellings)
             for arg in c.get_arguments():
-                cl.scan_type(arg.type, all_types, all_type_spellings)
+                cl.scan_types(arg.type, all_types, all_type_spellings)
             
             # Collect function
             functions[c.spelling] = c
@@ -85,10 +79,11 @@ def main():
     # Find function prototypes
     callback_types: list[Type] = []
     callback_type_spellings: set[str] = set()
+    type: Type
     for type in all_types:
-        type: Type = cl.primordial_type(type).get_canonical()
-        if type.kind in [TypeKind.FUNCTIONPROTO, TypeKind.FUNCTIONNOPROTO]:
-            spelling: str = cl.types.func_type_to_str(type, True)
+        type = cl.Typing.primitive(type).get_canonical()
+        if cl.Typing.is_func_ptr(type):
+            spelling: str = cl.TypeSpelling.func_type(type, True)
             if spelling in callback_type_spellings:
                 continue
             callback_types.append(type)
@@ -110,37 +105,43 @@ def main():
 
         # Functions
         f.write('#define X64NC_API_FOREACH(F)')
-        for fname, _ in functions.items():
-            f.write(f' \\\n    F({fname})')
+        for spelling in functions.keys():
+            f.write(f' \\\n    F({spelling})')
         f.write('\n\n')
 
         # Callbacks
         f.write('#define X64NC_CALLBACK_FOREACH(F)')
         for i in range(0, len(callback_types)):
-            f.write(f' \\\n    F(\"{cl.types.func_type_to_str(callback_types[i])}\", __QEMU_NC_CallbackThunk_{i + 1})')
+            f.write(f' \\\n    F(\"{cl.TypeSpelling.func_type(callback_types[i], True)}\", __QEMU_NC_CallbackThunk_{i + 1})')
         f.write('\n\n')
 
         declaration_file_content = f.getvalue()
     
     # Generate guest file
     with io.StringIO() as f:
-        for fname, c in functions.items():
+        # Generate function definitions
+        for c in functions.values():
             type: Type = c.type
-            return_type_str = cl.types.to_str(c.result_type)
+            return_type_spelling = cl.TypeSpelling.decl(c.result_type)
             args:list[Cursor] = list(c.get_arguments())
-            arg_list_str = str(', ').join([f"{cl.types.to_str(args[i].type)} {f'_arg{i + 1}'}" for i in range(0, len(args))])
-            
+
+            # Generate function declaration
+            decl_str = f'{return_type_spelling} {c.spelling} (' + \
+                str(', ').join([f"{cl.TypeSpelling.decl(args[i].type)} {f'_arg{i + 1}'}" for i in range(0, len(args))])
             if type.is_function_variadic():
-                print(f"{return_type_str} {fname} ({arg_list_str}, ...)", file=f)
-            else:
-                print(f"{return_type_str} {fname} ({arg_list_str})", file=f)
+                decl_str += ', ...'
+            decl_str += ')'
+            print(decl_str, file=f)
+
+            # Generate function body
             print("{", file=f)
             
-            args_arrange = ", ".join(f"_R(_arg{i + 1})" for i in range(0, len(args)))
-            print(f'    void *_args[] = {{{args_arrange}}};', file=f)
+            arg_ptr_array_str = str(', ').join(f"_R(_arg{i + 1})" for i in range(0, len(args)))
+            arg_ptr_array_str = '{' + arg_ptr_array_str + '}'
+            print(f'    void *_args[] = {arg_ptr_array_str};', file=f)
             
-            if return_type_str != 'void':
-                print(f"    {return_type_str} _ret;", file=f)
+            if return_type_spelling != 'void':
+                print(f'    {return_type_spelling} _ret;', file=f)
                 print(f'    x64nc_CallNativeProc(DynamicApis_p{c.spelling}, _args, &_ret);', file=f)
                 print(f'    return _ret;', file=f)
             else:
@@ -148,22 +149,30 @@ def main():
 
             print('}\n', file=f)
 
+        # Print hint of undefined functions
         for symbol in symbols_remaining:
             print(f'// No definition found for {symbol}', file=f)
         
         print("\n", file=f)
 
+        # Generate callback thunks
         for i in range(0, len(callback_types)):
             type: Type = callback_types[i]
-            return_type_str = cl.types.to_str(type.get_result())
+            return_type_spelling = cl.TypeSpelling.decl(type.get_result())
             arg_types:list[Type] = list(type.argument_types())
 
+            # Generate function declaration
             print(f"static void __QEMU_NC_CallbackThunk_{i + 1}(void *_callback, void *_args[], void *_ret)", file=f)
+
+            # Generate function body
             print("{", file=f)
-            if return_type_str != 'void':
-                print(f'    *(__typeof__({return_type_str}) *) _ret =', file=f)
-            arg_list_str = str(', ').join([f"*(__typeof__({cl.types.to_str(arg_types[i])}) *) {f'_args[{i}]'}" for i in range(0, len(arg_types))])
-            print(f'    ((__typeof__({type.get_canonical().spelling}) *) _callback) ({arg_list_str});', file=f)
+
+            if return_type_spelling != 'void':
+                print(f'    *(__typeof__({return_type_spelling}) *) _ret =', file=f)
+
+            arg_dereferenced_list_str = str(', ').join([ \
+                f"*(__typeof__({cl.TypeSpelling.decl(arg_types[i])}) *) {f'_args[{i}]'}" for i in range(0, len(arg_types))])
+            print(f'    ((__typeof__({type.get_canonical().spelling}) *) _callback) ({arg_dereferenced_list_str});', file=f)
             print('}\n', file=f)
         
         guest_delegate_file_content = f.getvalue()
@@ -172,16 +181,22 @@ def main():
     with io.StringIO() as f:
         print('X64NC_EXTERN_C_BEGIN', file=f)
         print('\n', file=f)
-        for fname, c in functions.items():
-            return_type_str = cl.types.to_str(c.result_type)
+        for c in functions.values():
+            return_type_spelling = cl.TypeSpelling.decl(c.result_type)
             args:list[Cursor] = list(c.get_arguments())
             
-            print(f"X64NC_DECL_EXPORT void my_{fname}(void *_args[], void *_ret)", file=f)
+            # Generate function declaration
+            print(f"X64NC_DECL_EXPORT void my_{c.spelling}(void *_args[], void *_ret)", file=f)
+
+            # Generate function body
             print("{", file=f)
-            if return_type_str != 'void':
-                print(f'    *(__typeof__({return_type_str}) *) _ret =', file=f)
-            arg_list_str = str(', ').join([f"*(__typeof__({cl.types.to_str(args[i].type)}) *) {f'_args[{i}]'}" for i in range(0, len(args))])
-            print(f'    DynamicApis_p{fname}({arg_list_str});', file=f)
+
+            if return_type_spelling != 'void':
+                print(f'    *(__typeof__({return_type_spelling}) *) _ret =', file=f)
+
+            arg_dereferenced_list_str = str(', ').join([ \
+                f"*(__typeof__({cl.TypeSpelling.decl(args[i].type)}) *) {f'_args[{i}]'}" for i in range(0, len(args))])
+            print(f'    DynamicApis_p{c.spelling}({arg_dereferenced_list_str});', file=f)
             print('}\n', file=f)
         print('\n', file=f)
         print('X64NC_EXTERN_C_END', file=f)
@@ -211,10 +226,7 @@ def main():
             shutil.copy(file, output_file_directory)
     
     # Rewrite Makefile
-    makefile_template = os.path.join(output_file_directory, 'Makefile.in')
-    replace_file_placeholders(makefile_template, \
-                              { 'LIBRARY_NAME': library_name }, os.path.join(output_file_directory, 'Makefile'))
-    os.remove(makefile_template)
+    replace_file_placeholders(os.path.join(output_file_directory, 'Makefile'), { 'LIBRARY_NAME': library_name })
 
 
 if __name__ == '__main__':

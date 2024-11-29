@@ -34,7 +34,7 @@ static constexpr auto _R(T &&value) {
 // =================================================================================================
 // Utils
 static const char *DynamicApis_GetLibraryPath(const char *filename) {
-    char *dir = getenv("X64NC_HOST_LIBRARY_DIR");
+    char *dir = getenv("X64NC_HOST_DELEGATE_LIBRARY_DIR");
     if (!dir) {
         fprintf(stderr, "Error: unable to get library path.\n");
         abort();
@@ -42,9 +42,13 @@ static const char *DynamicApis_GetLibraryPath(const char *filename) {
 
     static char result[PATH_MAX];
     strcpy(result, dir);
-    strcpy(result + strlen(dir), filename);
+    int dir_len = strlen(dir);
+    result[dir_len] = '/';
+    strcpy(result + (dir_len + 1), filename);
     return result;
 }
+
+static void DynamicApis_PreInitialize();
 
 static void DynamicApis_PostInitialize();
 // =================================================================================================
@@ -67,6 +71,8 @@ X64NC_API_FOREACH(_F)
 static void *DynamicApis_LibraryHandle = NULL;
 
 void X64NC_CONSTRUCTOR DynamicApis_Constructor() {
+    DynamicApis_PreInitialize();
+
     // 1. Load library
     void *dll = DynamicApis_LoadLibrary(
         (DynamicApis_GetLibraryPath(X64NC_HOST_DELEGATE_LIBRARY_NAME)), RTLD_NOW);
@@ -113,9 +119,12 @@ void X64NC_DESTRUCTOR DynamicApis_Destructor() {
 
 // =================================================================================================
 // Utils
-static void DynamicApis_PostInitialize() {
+static void DynamicApis_PreInitialize() {
 #define _F(SIGNATURE, FUNC) x64nc_RegisterCallThunk(SIGNATURE, (void *) FUNC);
     X64NC_CALLBACK_FOREACH(_F)
 #undef _F
+}
+
+static void DynamicApis_PostInitialize() {
 }
 // =================================================================================================

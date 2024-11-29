@@ -1,4 +1,4 @@
-# Usage: python cfiadd.py <source file> [-I<dir>] [-D<FOO=bar>] [-F <extra flags>] [-o output]
+# Usage: python cfiadd.py <source file> [-c <callbacks file>] [-o output] [-X <clang args>]
 
 from __future__ import annotations
 
@@ -27,7 +27,10 @@ from python.text import *
 
 
 class Global:
-    clang_library_dir = "/lib/x86_64-linux-gnu/libclang-18.so"
+    resource_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'delegen_resources')
+    ignored_function_scopes: list[str] = [
+        "bsearch"
+    ]
 
 
 class CheckGuardData:
@@ -53,7 +56,11 @@ def clang_reveal_call_expr(c: Cursor) -> tuple[Optional[Cursor], Type]:
         elif c.kind in [CursorKind.BINARY_OPERATOR, CursorKind.CONDITIONAL_OPERATOR, CursorKind.PAREN_EXPR]:
             break
         elif c.kind in [CursorKind.UNEXPOSED_EXPR]:
-            c = list(c.get_children())[0]
+            children = list(c.get_children())
+            if len(children) == 0:
+                # Maybe undefined symbol or special symbol(for example `_mm_getcsr`, I don't know why)
+                return c, c.type.get_canonical()
+            c = children[0]
             continue
         elif c.kind in [CursorKind.MEMBER_REF_EXPR, CursorKind.DECL_REF_EXPR]:
             # get reference
@@ -77,16 +84,14 @@ def clang_reveal_call_expr(c: Cursor) -> tuple[Optional[Cursor], Type]:
 
 def main():
     parser = argparse.ArgumentParser(description='Add CFI check guard for function pointers.')
-    parser.add_argument('-I', type=str, action='append', metavar="<dir>", default=[], help='Include path for headers.')
-    parser.add_argument('-D', type=str, action='append', metavar="<definition>", default=[], help='Macro definitions.')
-    parser.add_argument('-F', type=str, action='append', metavar="<extra flags>", default=[], help='Extra flags for the preprocessor.')
+    parser.add_argument('-X', nargs=argparse.REMAINDER, metavar="<clang args>", default=[], help='Extra arguments to pass to Clang.')
     parser.add_argument('-c', type=str, metavar="<file>", required=False, help='File contains list of callbacks.')
     parser.add_argument('-o', type=str, metavar="<out>", required=False, help='Output file name')
     parser.add_argument('source_file', type=str, help='Source file to process.')
     args = parser.parse_args()
 
     # Set the path to the clang library
-    Config.set_library_file(Global.clang_library_dir)
+    cl.setup()
 
     # Arguments
     callbacks_file: str = args.c if args.c else ''
@@ -95,18 +100,27 @@ def main():
 
     # Configure the index to parse the header files
     index = Index.create()
-    translation_unit = index.parse(source_file, args=['-x', 'c'] + 
-                                   [f'-I{path}' for path in args.I] + 
-                                   [f'-D{m}' for m in args.D] + args.F)
+    translation_unit = index.parse(source_file, args=['-x', 'c'] + args.X)
     
     # Collect function pointer positions
-    function_pointers: list[Cursor] = []
-    def scan_func_ptr(c: Cursor):
+    target_cursors: list[Cursor] = []
+    function_decls: list[Cursor] = []
+    def walkthrough_ast(c: Cursor):
+        if not os.path.samefile(str(c.extent.start.file), source_file):
+            return
+        skip_children = False
         if c.kind == CursorKind.CALL_EXPR:
-            function_pointers.append(c)
-        for child in c.get_children():
-            scan_func_ptr(child)
-    scan_func_ptr(translation_unit.cursor)
+            target_cursors.append(c)
+        if c.kind == CursorKind.TYPEDEF_DECL:
+            target_cursors.append(c)
+        if c.kind == CursorKind.FUNCTION_DECL:
+            function_decls.append(c)
+            if c.spelling in Global.ignored_function_scopes:
+                skip_children = True
+        if not skip_children:
+            for child in c.get_children():
+                walkthrough_ast(child)
+    walkthrough_ast(translation_unit.cursor)
 
     with open(source_file, mode='r') as f:
         source_code = f.readlines()
@@ -132,29 +146,54 @@ def main():
         return res
     
     def replace_source_range(range: SourceRange, s: str):
-        start: SourceLocation = range.start
-        end: SourceLocation = range.end
-        cur_line = start.line - 1
-        cur_column = start.column - 1
-        while(cur_line < end.line - 1):
+        replace_source(range.start.line, range.start.column, range.end.line, range.end.column, s)
+    
+    def replace_source(start_line: int, start_column: int, end_line: int, end_column: int, s: str):
+        cur_line = start_line - 1
+        cur_column = start_column - 1
+        while(cur_line < end_line - 1):
             source_code[cur_line] = source_code[cur_line][:cur_column]
             cur_line += 1
             cur_column = 0
-        source_code[cur_line] = source_code[cur_line][0:cur_column] +  s + source_code[cur_line][end.column - 1:]
+        source_code[cur_line] = source_code[cur_line][0:cur_column] + s + source_code[cur_line][end_column - 1:]
 
     # Process source code
     check_guards: list[CheckGuardData] = []
-    check_guard_map: dict[str, int] = {} # signature -> index in `check_guards`
+    check_guard_map: dict[str, int] = {}     # signature -> index in `check_guards`
+    unnamed_typedef_map: dict[str, str] = {} # typedef spelling -> generated record spelling
+    for i in range(0, len(target_cursors)):
+        c:Cursor = target_cursors[len(target_cursors) - 1 - i]
 
-    for i in range(0, len(function_pointers)):
-        c:Cursor = function_pointers[len(function_pointers) - 1 - i]
+        # typedef
+        if c.kind == CursorKind.TYPEDEF_DECL:
+            children: list[Cursor] = list(c.get_children())
+            if len(children) == 0:
+                continue
+            child = children[0]
+            if child.kind in [CursorKind.STRUCT_DECL, CursorKind.UNION_DECL]:
+                spelling = c.spelling
+                spelling_generated = f'{spelling}_TYPEDEF_HELPER'
+                keyword = 'struct' if child.kind == CursorKind.STRUCT_DECL else 'union'
 
+                r: SourceRange
+                r = c.extent
+                replace_source(r.end.line, r.end.column - len(spelling), \
+                               r.end.line, r.end.column, f";typedef {keyword} {spelling_generated} {spelling}")
+                r = child.extent
+                replace_source(r.start.line, r.start.column + len(keyword), \
+                               r.start.line, r.start.column + len(keyword), f" {spelling_generated} ")
+                r = c.extent
+                replace_source(r.start.line, r.start.column, r.start.line, r.start.column + 7, '')
+                unnamed_typedef_map[spelling] = f'{keyword} {spelling_generated}'
+            continue
+
+        # call expr
         reveal_result = clang_reveal_call_expr(list(c.get_children())[0])
         cursor: Optional[Cursor] = reveal_result[0]
         type: Type = reveal_result[1]
 
         # print(f'[{i + 1}]')
-        # cl.traverse_cursor(c, 0)
+        # cl.traverse_cursor(c, -1)
         # print(" ")
         # print(f"{cursor.kind if cursor else ''}, {type.kind}")
 
@@ -172,10 +211,12 @@ def main():
         # True if this expression calls a non-prototype function with arguments,
         # which is deprecated in mordern C
         no_proto_with_args = type.kind == TypeKind.FUNCTIONNOPROTO and len(call_args) > 0
-        reduced_spelling = cl.types.call_expr_to_str(c, type.get_result()) \
-            if no_proto_with_args else cl.types.func_type_to_str(type)
-        canonical_spelling = cl.types.call_expr_to_str(c, type.get_result(), False) \
-            if no_proto_with_args else cl.types.func_type_to_str(type, False)
+        if no_proto_with_args:
+            reduced_spelling = cl.TypeSpelling.call_expr(c, type.get_result(), True)
+            canonical_spelling = cl.TypeSpelling.call_expr(c, type.get_result(), False)
+        else:
+            reduced_spelling = cl.TypeSpelling.func_type(type, True)
+            canonical_spelling = cl.TypeSpelling.func_type(type, False)
         
         if len(callbacks_set) > 0 and not reduced_spelling in callbacks_set:
             continue
@@ -233,6 +274,7 @@ def main():
         print('*****************************************************************************/', file=f)
         print('extern int printf (const char *, ...);', file=f)
         print('extern void abort (void);', file=f)
+        print('#ifndef NULL\n#define NULL ((void*)0)\n#endif', file=f)
         print('\n', file=f)
         print('extern void *QEMU_NC_GetHostExecuteCallback();', file=f)
         print('extern void *QEMU_NC_LookUpGuestThunk(const char *);', file=f)
@@ -241,32 +283,32 @@ def main():
         for _, idx in check_guard_map.items():
             cg: CheckGuardData = check_guards[idx]
             print(f'static void *{cg.name}_Thunk;', file=f)
-            print(f'static const char {cg.name}_Signature[]=\"{cl.types.remove_cv(cg.reduced_spelling)}\";', file=f)
-        print(f'void {cl.StringLiteral.attribute_constructor} __QEMU_NC_Initialize()', file=f)
+            print(f'static const char {cg.name}_Signature[]=\"{cl.TypeSpelling.remove_cv(cg.reduced_spelling)}\";', file=f)
+        print(f'static void {cl.StringLiteral.attribute_constructor} __QEMU_NC_Initialize()', file=f)
         print('{', file=f)
         print('    _QEMU_NC_HostExecuteCallback = (QEMU_NC_HostExecuteCallbackType) QEMU_NC_GetHostExecuteCallback();', file=f)
         for _, idx in check_guard_map.items():
             cg: CheckGuardData = check_guards[idx]
             print(f'    if (!({cg.name}_Thunk = QEMU_NC_LookUpGuestThunk({cg.name}_Signature)))', file=f)
             print('    {', file=f)
-            print(f'        printf(\"Host Library: Failed to get callback thunk of \\\"%s\\\"\", {cg.name}_Signature);', file=f)
+            print(f'        printf(\"Host Library: Failed to get callback thunk of \\\"%s\\\"\\n\", {cg.name}_Signature);', file=f)
             print(f'        abort();', file=f)
             print('    }', file=f)
         print('}\n', file=f)
         for signature, idx in check_guard_map.items():
             cg: CheckGuardData = check_guards[idx]
-            return_type_str = cl.types.to_str(cg.result_type)
-            arg_list_str = str(', ').join([f"{cl.types.to_str(cg.arg_types[i])} {f'_arg{i + 1}'}" for i in range(0, len(cg.arg_types))])
+            return_type_str = cl.TypeSpelling.decl(cg.result_type)
+            arg_list_str = str(', ').join([f"{cl.TypeSpelling.decl(cg.arg_types[i])} {f'_arg{i + 1}'}" for i in range(0, len(cg.arg_types))])
             
-            decl = f"{return_type_str} {cg.name} (__typeof__({cg.canonical_spelling if cg.no_proto_with_args else cg.type.get_canonical().spelling}) *_callback"
+            decl_str = f"static {return_type_str} {cg.name} (__typeof__({cg.canonical_spelling if cg.no_proto_with_args else cg.type.get_canonical().spelling}) *_callback"
             if len(cg.arg_types) > 0:
-                decl += f', {arg_list_str}'
+                decl_str += f', {arg_list_str}'
             if not cg.no_proto_with_args and cg.type.kind == TypeKind.FUNCTIONPROTO and cg.type.is_function_variadic():
-                decl += ", ...)"
+                decl_str += ", ...)"
             else:
-                decl += ")"
-            check_guard_declarations[signature] = decl
-            print(decl, file=f)
+                decl_str += ")"
+            check_guard_declarations[signature] = decl_str
+            print(decl_str, file=f)
 
             print("{", file=f)
             print('    if ((long) _callback > (long) _QEMU_NC_HostExecuteCallback)', file=f)
@@ -290,20 +332,27 @@ def main():
         existing_records: set[str] = set()
         for signature, idx in check_guard_map.items():
             cg: CheckGuardData = check_guards[idx]
-            decl = check_guard_declarations[signature]
-            
-            arg_type: Type
-            if cg.type.kind == TypeKind.FUNCTIONPROTO:
-                for arg_type in cg.type.argument_types():
-                    arg_type = cl.primordial_type(arg_type)
-                    if arg_type.kind == TypeKind.RECORD:
-                        record_spelling: str = arg_type.get_canonical().spelling
-                        if record_spelling in existing_records:
-                            continue
-                        existing_records.add(record_spelling)
+            decl_str = check_guard_declarations[signature]
+
+            all_types: list[Type] = []
+            all_type_spellings: set[str] = set()
+            for type in cg.arg_types:
+                cl.scan_types(type, all_types, all_type_spellings, False)
+            cl.scan_types(cg.result_type, all_types, all_type_spellings, False)   
+
+            for type in all_types:
+                print(f'{type.spelling}, {type.kind}')
+                if type.kind == TypeKind.RECORD:
+                    record_spelling: str = type.get_canonical().spelling
+                    if record_spelling in existing_records:
+                        continue
+                    existing_records.add(record_spelling)
+                    if record_spelling in unnamed_typedef_map:
+                        print(f'typedef {unnamed_typedef_map[record_spelling]} {record_spelling};', file=f)
+                    else:
                         print(f'{record_spelling};', file=f)
 
-            print(f'{decl};', file=f)
+            print(f'{decl_str};', file=f)
         check_guard_declarations_code = f.getvalue()
 
     if len(check_guard_declarations) > 0:

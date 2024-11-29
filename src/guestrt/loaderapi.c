@@ -16,11 +16,14 @@ void *x64nc_LoadLibrary(const char *path, int flags) {
     return ret;
 }
 
-void x64nc_FreeLibrary(void *handle) {
+int x64nc_FreeLibrary(void *handle) {
+    int ret;
     void *a[] = {
         handle,
+        &ret,
     };
     (void) syscall2(X64NC_MAGIC_SYSCALL_INDEX, _reinterpret_cast(void *) X64NC_FreeLibrary, a);
+    return ret;
 }
 
 void *x64nc_GetProcAddress(void *handle, const char *name) {
@@ -81,8 +84,11 @@ int x64nc_CallNativeProc(void *func, void *args[], void *ret) {
 }
 
 void x64nc_RegisterCallThunk(const char *signature, void *func) {
-    syscall3(X64NC_MAGIC_SYSCALL_INDEX, _reinterpret_cast(void *) X64NC_RegisterCallThunk,
-             _const_cast(char *)(signature), func);
+    void *a[] = {
+        _const_cast(char *)(signature),
+        func,
+    };
+    syscall2(X64NC_MAGIC_SYSCALL_INDEX, _reinterpret_cast(void *) X64NC_RegisterCallThunk, a);
 }
 
 void x64nc_ExtractVariadicList(const char *fmt, void **data_buf, char *types_buf) {

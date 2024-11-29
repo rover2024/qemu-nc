@@ -3,10 +3,10 @@ LIBNAME := @LIBRARY_NAME@
 CC := gcc
 
 INCLUDE_DIRS := \
-	/home/functioner/documents/sjtu-projects/qemu-nc/include
+	/home/overworld/Documents/ccxxprojs/qemu-nc/include
 
 LINK_DIRS := \
-	/home/functioner/documents/sjtu-projects/qemu-nc/build/Release/lib
+	/home/overworld/Documents/ccxxprojs/qemu-nc/build/Release/lib
 
 DEFINITIONS := \
 	X64NC_LIBRARY_NAME=\"$(LIBNAME)\"

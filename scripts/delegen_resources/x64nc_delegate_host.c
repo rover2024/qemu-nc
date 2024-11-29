@@ -32,9 +32,13 @@ static const char *DynamicApis_GetLibraryPath(const char *filename) {
 
     static char result[PATH_MAX];
     strcpy(result, dir);
-    strcpy(result + strlen(dir), filename);
+    int dir_len = strlen(dir);
+    result[dir_len] = '/';
+    strcpy(result + (dir_len + 1), filename);
     return result;
 }
+
+static void DynamicApis_PreInitialize();
 
 static void DynamicApis_PostInitialize();
 // =================================================================================================
@@ -57,6 +61,8 @@ X64NC_API_FOREACH(_F)
 static void *DynamicApis_LibraryHandle = NULL;
 
 void X64NC_CONSTRUCTOR DynamicApis_Constructor() {
+    DynamicApis_PreInitialize();
+
     // 1. Load library
     void *dll =
         DynamicApis_LoadLibrary(DynamicApis_GetLibraryPath(X64NC_HOST_LIBRARY_NAME), RTLD_NOW);
@@ -79,6 +85,7 @@ void X64NC_CONSTRUCTOR DynamicApis_Constructor() {
     }
     X64NC_API_FOREACH(_F)
 #undef _F
+
     DynamicApis_PostInitialize();
 }
 
@@ -102,6 +109,10 @@ void X64NC_DESTRUCTOR DynamicApis_Destructor() {
 
 // =================================================================================================
 // Utils
+static void DynamicApis_PreInitialize() {
+
+}
+
 static void DynamicApis_PostInitialize() {
 }
 // =================================================================================================

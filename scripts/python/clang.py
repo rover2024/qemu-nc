@@ -11,72 +11,122 @@ from clang.cindex import TypeKind
 from clang.cindex import SourceRange
 from clang.cindex import SourceLocation
 
+
+def setup():
+    Config.set_library_file("/lib/x86_64-linux-gnu/libclang-18.so.18")
+
+
 class StringLiteral:
-    extern_c: str = "extern \"C\""
+    extern_c = "extern \"C\""
     attribute_constructor = "__attribute__((constructor))"
     attribute_visible = "__attribute__((visibility(\"default\")))"
 
-def scan_type(type: Type, visited_types: list[Type], visited_type_spellings: set[str]):
-    canonical_type: Type = type.get_canonical()
-    if canonical_type.spelling in visited_type_spellings:
+
+"""
+Walk through the given type and collect all emerged types.
+"""
+def scan_types(type: Type, visited_types: list[Type], visited_type_spellings: set[str], scan_fields: bool = True):
+    type = type.get_canonical()
+    if type.spelling in visited_type_spellings:
         return
-    visited_types.append(canonical_type)
-    visited_type_spellings.add(canonical_type.spelling)
+    visited_types.append(type)
+    visited_type_spellings.add(type.spelling)
 
-    if canonical_type.kind == TypeKind.POINTER:
+    if type.kind == TypeKind.POINTER:
         # Pointer type
-        scan_type(canonical_type.get_pointee(), visited_types, visited_type_spellings)
-
-    elif canonical_type.kind == TypeKind.RECORD:
-        # Struct type, scan members
-        for field in canonical_type.get_declaration().get_children():
-            if field.kind == CursorKind.FIELD_DECL:
-                scan_type(field.type, visited_types, visited_type_spellings)
-    
-    elif canonical_type.kind == TypeKind.CONSTANTARRAY:
-        # Const array type, convert to pointer
-        element_type = canonical_type.element_type
-        scan_type(element_type, visited_types, visited_type_spellings)
-    
-    elif canonical_type.kind == TypeKind.FUNCTIONPROTO:
+        scan_types(type.get_pointee(), visited_types, visited_type_spellings)
+    elif Typing.is_array(type):
+        # Array type, convert to pointer
+        scan_types(type.element_type, visited_types, visited_type_spellings)
+    elif type.kind == TypeKind.FUNCTIONPROTO:
         # Function pointer type, scan return type and argument types
-        scan_type(canonical_type.get_result(), visited_types, visited_type_spellings)
-        for arg in canonical_type.argument_types():
-            scan_type(arg, visited_types, visited_type_spellings)
+        scan_types(type.get_result(), visited_types, visited_type_spellings)
+        for arg in type.argument_types():
+            scan_types(arg, visited_types, visited_type_spellings)
+    elif type.kind == TypeKind.FUNCTIONNOPROTO:
+        scan_types(type.get_result(), visited_types, visited_type_spellings)
+    elif type.kind == TypeKind.RECORD:
+            # Struct/Union type, scan members
+        if scan_fields:
+            for field in type.get_fields():
+                scan_types(field.type, visited_types, visited_type_spellings)
 
 
+"""
+Walk through the given cursor and print in tree structure.
+"""
 def traverse_cursor(c: Cursor, indent: int):
     range: SourceRange = c.extent
     start: SourceLocation = range.start
     end: SourceLocation = range.end
     referenced: str = c.referenced.spelling if c.referenced else ""
-    print(f"{' ' * indent}{c.kind}, \"{c.spelling}\", {start.line}:{start.column}, {end.line}:{end.column}, [{referenced}]")
+    print(f"{' ' * indent}{c.kind}, \"{c.spelling}\", {c.type.kind}, {start.line}:{start.column}, {end.line}:{end.column}, [{referenced}]")
     
-    if indent == 0:
-        traverse_cursor(list(c.get_children())[0], indent + 4)
+    if indent == -1:
+        traverse_cursor(list(c.get_children())[0], 4)
     else:
         for child in c.get_children():
             traverse_cursor(child, indent + 4)
 
 
-def is_function_pointer(type: Type) -> bool:
-    return primordial_type(type).kind in [TypeKind.FUNCTIONPROTO, TypeKind.FUNCTIONNOPROTO]
+class Typing:
+    @staticmethod
+    def is_array(type: Type) -> bool:
+        return type.kind in [TypeKind.CONSTANTARRAY, TypeKind.INCOMPLETEARRAY, TypeKind.VARIABLEARRAY]
 
 
-def primordial_type(type: Type) -> Type:
-    while True:
+    @staticmethod
+    def is_func_ptr(type: Type) -> bool:
+        return Typing.primitive(type).kind in [TypeKind.FUNCTIONPROTO, TypeKind.FUNCTIONNOPROTO]
+
+
+    """
+    Returns the original type without any encapsulation(such as pointer, array, etc).
+    """
+    @staticmethod
+    def primitive(type: Type) -> Type:
+        while True:
+            type = type.get_canonical()
+            if type.kind == TypeKind.POINTER:
+                type = type.get_pointee()
+                continue
+            if Typing.is_array(type):
+                type = type.element_type
+                continue
+            break
+        return type
+
+
+class TypeSpelling:
+    """
+    Removes 'const' and 'volatile' in spelling.
+    """
+    @staticmethod
+    def remove_cv(s: str) -> str:
+        s = s.replace('const ', '')
+        s = s.replace('volatile ', '')
+        return s
+
+
+    """
+    Returns the spelling in the form that can be used to declare a variable.
+    """
+    @staticmethod
+    def decl(type: Type) -> str:
         type = type.get_canonical()
-        if type.kind == TypeKind.POINTER:
-            type = type.get_pointee()
-            continue
-        if type.kind == TypeKind.CONSTANTARRAY:
-            type = type.element_type
-            continue
-        break
-    return type
+        if Typing.is_func_ptr(type):
+            type_str = f'__typeof__({type.spelling})/*FP*/'
+        elif Typing.is_array(type):
+            type_str = TypeSpelling.decl(type.element_type)
+            type_str += '*' if type_str[-1] == '*' else ' *'
+        else:
+            type_str = type.spelling
+        return type_str
 
 
-class types:
+    """
+    Returns the decayed spelling of a type.
+    """
     @staticmethod
     def reduced(type: Type) -> str:
         type = type.get_canonical()
@@ -86,56 +136,42 @@ class types:
             return 'int'
         elif type.kind in [ TypeKind.LONG, TypeKind.LONGLONG, TypeKind.ULONG, TypeKind.ULONGLONG]:
             return 'long'
-        elif type.kind in [ TypeKind.POINTER, TypeKind.FUNCTIONPROTO, TypeKind.FUNCTIONNOPROTO, TypeKind.CONSTANTARRAY ]:
+        elif type.kind in [ TypeKind.POINTER, TypeKind.FUNCTIONPROTO, TypeKind.FUNCTIONNOPROTO ] or Typing.is_array(type):
             return 'void *'
             # return 'long'
-        return types.remove_cv(type.spelling)
+        return TypeSpelling.remove_cv(type.spelling)
     
-    @staticmethod
-    def remove_cv(s: str) -> str:
-        s = s.replace('const ', '')
-        s = s.replace('volatile ', '')
-        return s
 
+    """
+    Returns the spelling of a call expression.
+    """
     @staticmethod
-    def to_str(type: Type) -> str:
-        type = type.get_canonical()
-        if is_function_pointer(type):
-            type_str = f'__typeof__({type.spelling})/*FP*/'
-        elif type.kind == TypeKind.CONSTANTARRAY:
-            type_str = types.to_str(type.element_type)
-            type_str += '*' if type_str[-1] == '*' else ' *'
-        else:
-            type_str = type.spelling
-        return type_str
-    
-    @staticmethod
-    def call_expr_to_str(c: Cursor, result_type: Type, reduce: bool = True) -> str:
-        """Returns the simplest spelling of a call expression."""
-        res = types.reduced(result_type) if reduce else types.to_str(result_type)
+    def call_expr(c: Cursor, result_type: Type, reduce: bool = True) -> str:
+        res = TypeSpelling.reduced(result_type) if reduce else TypeSpelling.decl(result_type)
         if res[-1] != '*':
             res += ' '
         res += '('
-        res += ', '.join([(types.reduced(arg.type) \
+        res += ', '.join([(TypeSpelling.reduced(arg.type) \
                                 if reduce else arg.type.get_canonical().spelling) \
                                     for arg in c.get_arguments()])
         res += ')'
-        return types.remove_cv(res) if reduce else res
+        return TypeSpelling.remove_cv(res) if reduce else res
 
 
+    """
+    Returns the spelling of a fucntion proto type.
+    """
     @staticmethod
-    def func_type_to_str(type: Type, reduce: bool = True) -> str:
-        """Returns the simplest spelling of a fucntion proto type."""
-        res = types.reduced(type.get_result()) \
-            if reduce else types.reduced(type.get_result())
+    def func_type(type: Type, reduce: bool = True) -> str:
+        res = TypeSpelling.reduced(type.get_result()) if reduce else TypeSpelling.decl(type.get_result())
         if res[-1] != '*':
             res += ' '
         res += '('
         if type.kind == TypeKind.FUNCTIONPROTO:
-            res += ', '.join([(types.reduced(arg_type) \
+            res += ', '.join([(TypeSpelling.reduced(arg_type) \
                                 if reduce else arg_type.get_canonical().spelling) \
                                     for arg_type in type.argument_types() ])
             if type.is_function_variadic():
                 res += ', ...'
         res += ')'
-        return types.remove_cv(res) if reduce else res
+        return TypeSpelling.remove_cv(res) if reduce else res
