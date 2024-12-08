@@ -8,30 +8,30 @@ import subprocess
 import os
 import multiprocessing
 
-test_files: list[str] = [
-    "driver/others/blas_server.c",
-    "lapack-netlib/SRC/cgees.c",
-    "lapack-netlib/SRC/cgeesx.c",
-    "lapack-netlib/SRC/cgges.c",
-    "lapack-netlib/SRC/cgges3.c",
-    "lapack-netlib/SRC/cggesx.c",
-    "lapack-netlib/SRC/dgees.c",
-    "lapack-netlib/SRC/dgeesx.c",
-    "lapack-netlib/SRC/dgges.c",
-    "lapack-netlib/SRC/dgges3.c",
-    "lapack-netlib/SRC/dggesx.c",
-    "lapack-netlib/SRC/sgees.c",
-    "lapack-netlib/SRC/sgeesx.c",
-    "lapack-netlib/SRC/sgges.c",
-    "lapack-netlib/SRC/sgges3.c",
-    "lapack-netlib/SRC/sggesx.c",
-    "lapack-netlib/SRC/zgees.c",
-    "lapack-netlib/SRC/zgeesx.c",
-    "lapack-netlib/SRC/zgges.c",
-    "lapack-netlib/SRC/zgges3.c",
-    "lapack-netlib/SRC/zggesx.c",
-    "utest/utest_main.c"
-]
+# test_files: list[str] = [
+#     "driver/others/blas_server.c",
+#     "lapack-netlib/SRC/cgees.c",
+#     "lapack-netlib/SRC/cgeesx.c",
+#     "lapack-netlib/SRC/cgges.c",
+#     "lapack-netlib/SRC/cgges3.c",
+#     "lapack-netlib/SRC/cggesx.c",
+#     "lapack-netlib/SRC/dgees.c",
+#     "lapack-netlib/SRC/dgeesx.c",
+#     "lapack-netlib/SRC/dgges.c",
+#     "lapack-netlib/SRC/dgges3.c",
+#     "lapack-netlib/SRC/dggesx.c",
+#     "lapack-netlib/SRC/sgees.c",
+#     "lapack-netlib/SRC/sgeesx.c",
+#     "lapack-netlib/SRC/sgges.c",
+#     "lapack-netlib/SRC/sgges3.c",
+#     "lapack-netlib/SRC/sggesx.c",
+#     "lapack-netlib/SRC/zgees.c",
+#     "lapack-netlib/SRC/zgeesx.c",
+#     "lapack-netlib/SRC/zgges.c",
+#     "lapack-netlib/SRC/zgges3.c",
+#     "lapack-netlib/SRC/zggesx.c",
+#     "utest/utest_main.c"
+# ]
 
 def main():
     parser = argparse.ArgumentParser(description='Read compile commands and add CFIs.')
@@ -56,13 +56,13 @@ def main():
         dir: str = obj['directory']
         filename: str = obj['file']
         
-        is_test_file = False
-        for item in test_files:
-            if filename.endswith(item):
-                is_test_file = True
-                break
-        if not is_test_file:
-            continue
+        # is_test_file = False
+        # for item in test_files:
+        #     if filename.endswith(item):
+        #         is_test_file = True
+        #         break
+        # if not is_test_file:
+        #     continue
 
         source_file = filename if os.path.isabs(filename) else os.path.join(dir, filename)
         temp_file = f'{source_file}.tmp'
@@ -84,7 +84,7 @@ def main():
 
         if expand:
             # Run CC
-            cmds: list[str] = [ tokens[0], '-E', '-o', temp_file ] + compile_options
+            cmds: list[str] = [ tokens[0], '-E', source_file, '-o', temp_file ] + compile_options
             result = subprocess.run(
                 cmds,
                 capture_output=True,

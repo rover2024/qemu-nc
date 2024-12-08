@@ -12,7 +12,16 @@
 typedef void (*X64NC_HostExecuteCallback)(void * /*thunk*/, void * /*callback*/, void * /*args*/,
                                           void * /*ret*/);
 
+typedef void (*X64NC_HostExtraEvent)(int /*num*/, void * /*args*/);
+
+typedef pthread_t (*X64NC_GetHostLastThreadId)();
+
 static X64NC_HostExecuteCallback m_hec;
+static X64NC_HostExtraEvent m_hee;
+static X64NC_GetHostLastThreadId m_ghlti;
+static decltype(&pthread_create) m_org_pthread_create;
+static decltype(&pthread_exit) m_org_pthread_exit;
+
 static std::unordered_map<std::string, void *> m_thunks;
 
 static unsigned int host_audit_objopen(struct link_map *map, Lmid_t lmid, uintptr_t *cookie,
@@ -46,8 +55,26 @@ static uintptr_t host_audit_symbind64(Elf64_Sym *sym, unsigned int ndx, uintptr_
 // --------------------------------------------------------------------------------------
 // QEMU emulator will call the following functions
 
-extern "C" X64NC_EXPORT void _QEMU_NC_SetHostExecuteCallback(void *callback) {
-    m_hec = reinterpret_cast<X64NC_HostExecuteCallback>(callback);
+extern "C" X64NC_EXPORT void _QEMU_NC_SetThunk(int id, void *thunk) {
+    switch (id) {
+        case X64NC_Thunk_HostExecuteCallback:
+            m_hec = reinterpret_cast<X64NC_HostExecuteCallback>(thunk);
+            break;
+        case X64NC_Thunk_HostExtraEvent:
+            m_hee = reinterpret_cast<X64NC_HostExtraEvent>(thunk);
+            break;
+        case X64NC_Thunk_GetHostLastThreadId:
+            m_ghlti = reinterpret_cast<X64NC_GetHostLastThreadId>(thunk);
+            break;
+        case X64NC_Thunk_ThreadCreate:
+            m_org_pthread_create = reinterpret_cast<decltype(m_org_pthread_create)>(thunk);
+            break;
+        case X64NC_Thunk_ThreadExit:
+            m_org_pthread_exit = reinterpret_cast<decltype(m_org_pthread_exit)>(thunk);
+            break;
+        default:
+            break;
+    }
 }
 
 extern "C" X64NC_EXPORT void _QEMU_NC_HandleExtraGuestCall(int type, void **args) {
@@ -90,8 +117,7 @@ extern "C" X64NC_EXPORT void _QEMU_NC_HandleExtraGuestCall(int type, void **args
 // --------------------------------------------------------------------------------------
 // Host libraries will call the following functions
 
-void QEMU_NC_CallHostExecuteCallback(void *thunk, void *callback, void *args,
-                                                  void *ret) {
+void QEMU_NC_CallHostExecuteCallback(void *thunk, void *callback, void *args, void *ret) {
     m_hec(thunk, callback, args, ret);
 }
 
@@ -108,3 +134,30 @@ void *QEMU_NC_LookUpGuestThunk(const char *sign) {
 }
 
 // --------------------------------------------------------------------------------------
+extern "C" X64NC_EXPORT int my_pthread_create(pthread_t *__restrict thread,
+                                           const pthread_attr_t *__restrict attr,
+                                           void *(*start_routine)(void *), void *__restrict arg) {
+    printf("Call pthread_create: %p %p\n", start_routine, arg);
+    // __asm volatile("ud2");
+    void *pthread_create_args[] = {
+        thread,
+        const_cast<pthread_attr_t *>(attr),
+        (void *) start_routine,
+        arg,
+    };
+    int ret;
+    void *event_args[] = {
+        pthread_create_args,
+        &ret,
+    };
+    m_hee(X64NC_Result_ThreadCreate, event_args);
+    *thread = m_ghlti();
+    printf("Call pthread_create success: %lx\n", *thread);
+    return ret;
+}
+
+extern "C" X64NC_EXPORT void my_pthread_exit(void *ret) {
+    m_hee(X64NC_Result_ThreadExit, ret);
+
+    __builtin_unreachable();
+}

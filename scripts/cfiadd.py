@@ -8,6 +8,7 @@ import re
 import io
 import argparse
 import shutil
+import uuid
 
 from clang.cindex import Config
 from clang.cindex import Index
@@ -42,6 +43,19 @@ class CheckGuardData:
         self.canonical_spelling: str
         self.type: Type
         self.no_proto_with_args: bool
+    
+    def decl(self) -> str:
+        return_type_str = cl.TypeSpelling.decl(self.result_type)
+        arg_list_str = str(', ').join([f"{cl.TypeSpelling.decl(self.arg_types[i])} {f'_arg{i + 1}'}" for i in range(0, len(self.arg_types))])
+        
+        decl_str = f"{return_type_str} {self.name} (__typeof__({self.canonical_spelling if self.no_proto_with_args else self.type.get_canonical().spelling}) *_callback"
+        if len(self.arg_types) > 0:
+            decl_str += f', {arg_list_str}'
+        if not self.no_proto_with_args and self.type.kind == TypeKind.FUNCTIONPROTO and self.type.is_function_variadic():
+            decl_str += ", ...)"
+        else:
+            decl_str += ")"
+        return decl_str
 
 
 def clang_reveal_call_expr(c: Cursor) -> tuple[Optional[Cursor], Type]:
@@ -104,23 +118,67 @@ def main():
     
     # Collect function pointer positions
     target_cursors: list[Cursor] = []
+    target_cursor_last_statements: list[Cursor] = []
+
     function_decls: list[Cursor] = []
-    def walkthrough_ast(c: Cursor):
-        if not os.path.samefile(str(c.extent.start.file), source_file):
+    def walkthrough_ast(c: Cursor, stmt: Cursor, parent: Optional[Cursor]):
+        if c.extent.start.file and not os.path.samefile(str(c.extent.start.file), source_file):
             return
         skip_children = False
+        if c.kind.is_statement():
+            stmt = c
+        elif c.kind.is_expression():
+            if parent and parent.kind == CursorKind.COMPOUND_STMT:
+                stmt = c
         if c.kind == CursorKind.CALL_EXPR:
             target_cursors.append(c)
-        if c.kind == CursorKind.TYPEDEF_DECL:
-            target_cursors.append(c)
-        if c.kind == CursorKind.FUNCTION_DECL:
+            target_cursor_last_statements.append(stmt)
+        elif c.kind == CursorKind.FUNCTION_DECL:
             function_decls.append(c)
             if c.spelling in Global.ignored_function_scopes:
                 skip_children = True
         if not skip_children:
             for child in c.get_children():
-                walkthrough_ast(child)
-    walkthrough_ast(translation_unit.cursor)
+                walkthrough_ast(child, stmt, c)
+    walkthrough_ast(translation_unit.cursor, translation_unit.cursor, None)
+
+    def contains_source_range(parent: SourceRange, child: SourceRange, accept_equal: bool = True):
+        if accept_equal:
+            return (parent.start.line < child.start.line or (parent.start.line == child.start.line and parent.start.column <= child.start.column)) \
+                    and \
+               (parent.end.line > child.end.line or (parent.end.line == child.end.line and parent.end.column >= child.end.column))
+        else:
+            return (parent.start.line < child.start.line or (parent.start.line == child.start.line and parent.start.column < child.start.column)) \
+                    and \
+               (parent.end.line > child.end.line or (parent.end.line == child.end.line and parent.end.column > child.end.column))
+    
+
+    sorted_target_cursors: list[Cursor] = []
+    sorted_target_cursors_is_statement: list[bool] = []
+    last_statment: Optional[Cursor] = None
+    for i in range(0, len(target_cursors)):
+        c = target_cursors[i]
+        stmt = target_cursor_last_statements[i]
+        # r: SourceRange = c.extent
+        # start: SourceLocation = r.start
+        # end: SourceLocation = r.end
+        # print(f"{c.kind}, \"{c.spelling}\", {c.type.kind}, {start.line}:{start.column}, {end.line}:{end.column}")
+        
+        if not last_statment or not contains_source_range(last_statment.extent, c.extent) or contains_source_range(last_statment.extent, stmt.extent, False):
+            last_statment = stmt
+            sorted_target_cursors.append(last_statment)
+            sorted_target_cursors_is_statement.append(True)
+
+            # r: SourceRange = stmt.extent
+            # start: SourceLocation = r.start
+            # end: SourceLocation = r.end
+            # print(f"ADD {start.line}:{start.column}, {end.line}:{end.column}")
+        sorted_target_cursors.append(c)
+        sorted_target_cursors_is_statement.append(False)
+
+    # cl.traverse_cursor(translation_unit.cursor, 0)
+    # if 1 + 1 == 2:
+    #     return
 
     with open(source_file, mode='r') as f:
         source_code = f.readlines()
@@ -150,6 +208,7 @@ def main():
     
     def replace_source(start_line: int, start_column: int, end_line: int, end_column: int, s: str):
         cur_line = start_line - 1
+        
         cur_column = start_column - 1
         while(cur_line < end_line - 1):
             source_code[cur_line] = source_code[cur_line][:cur_column]
@@ -160,31 +219,13 @@ def main():
     # Process source code
     check_guards: list[CheckGuardData] = []
     check_guard_map: dict[str, int] = {}     # signature -> index in `check_guards`
-    unnamed_typedef_map: dict[str, str] = {} # typedef spelling -> generated record spelling
-    for i in range(0, len(target_cursors)):
-        c:Cursor = target_cursors[len(target_cursors) - 1 - i]
-
-        # typedef
-        if c.kind == CursorKind.TYPEDEF_DECL:
-            children: list[Cursor] = list(c.get_children())
-            if len(children) == 0:
-                continue
-            child = children[0]
-            if child.kind in [CursorKind.STRUCT_DECL, CursorKind.UNION_DECL]:
-                spelling = c.spelling
-                spelling_generated = f'{spelling}_TYPEDEF_HELPER'
-                keyword = 'struct' if child.kind == CursorKind.STRUCT_DECL else 'union'
-
-                r: SourceRange
-                r = c.extent
-                replace_source(r.end.line, r.end.column - len(spelling), \
-                               r.end.line, r.end.column, f";typedef {keyword} {spelling_generated} {spelling}")
-                r = child.extent
-                replace_source(r.start.line, r.start.column + len(keyword), \
-                               r.start.line, r.start.column + len(keyword), f" {spelling_generated} ")
-                r = c.extent
-                replace_source(r.start.line, r.start.column, r.start.line, r.start.column + 7, '')
-                unnamed_typedef_map[spelling] = f'{keyword} {spelling_generated}'
+    forward_decl_stack: list[str] = []
+    for i in range(0, len(sorted_target_cursors)):
+        idx = len(sorted_target_cursors) - 1 - i
+        c:Cursor = sorted_target_cursors[idx]
+        if sorted_target_cursors_is_statement[idx]:
+            replace_source(c.extent.start.line, c.extent.start.column, c.extent.start.line, c.extent.start.column, '\n'.join(forward_decl_stack) + '\n')
+            forward_decl_stack.clear()
             continue
 
         # call expr
@@ -245,7 +286,8 @@ def main():
         if canonical_spelling in check_guard_map:
             name = check_guards[check_guard_map[canonical_spelling]].name
         else:
-            name = f'__QEMU_NC_CHECK_GUARD_{len(check_guard_map) + 1}'
+            random_suffix = str(uuid.uuid4()).replace('-', '_')
+            name = f'__QEMU_NC_CHECK_GUARD_{len(check_guard_map) + 1}__{random_suffix}'
             check_guard_map[canonical_spelling] = len(check_guards)
         replace_source_range(func_ptr.extent, name)
 
@@ -261,6 +303,7 @@ def main():
         cg.type = type
         cg.no_proto_with_args = no_proto_with_args
         check_guards.append(cg)
+        forward_decl_stack.insert(0, f'extern {cg.decl()};')
 
     # Generate CFI definitions
     check_guard_declarations: dict[str, str] = {}
@@ -298,15 +341,7 @@ def main():
         for signature, idx in check_guard_map.items():
             cg: CheckGuardData = check_guards[idx]
             return_type_str = cl.TypeSpelling.decl(cg.result_type)
-            arg_list_str = str(', ').join([f"{cl.TypeSpelling.decl(cg.arg_types[i])} {f'_arg{i + 1}'}" for i in range(0, len(cg.arg_types))])
-            
-            decl_str = f"static {return_type_str} {cg.name} (__typeof__({cg.canonical_spelling if cg.no_proto_with_args else cg.type.get_canonical().spelling}) *_callback"
-            if len(cg.arg_types) > 0:
-                decl_str += f', {arg_list_str}'
-            if not cg.no_proto_with_args and cg.type.kind == TypeKind.FUNCTIONPROTO and cg.type.is_function_variadic():
-                decl_str += ", ...)"
-            else:
-                decl_str += ")"
+            decl_str = cg.decl()
             check_guard_declarations[signature] = decl_str
             print(decl_str, file=f)
 
@@ -326,39 +361,9 @@ def main():
                 print(f'    _QEMU_NC_HostExecuteCallback({cg.name}_Thunk, (void *) _callback, _args, NULL);', file=f)
             print('}\n', file=f)
         check_guard_definitions_code = f.getvalue()
-    
-    # Generate CFI declarations
-    with io.StringIO() as f:
-        existing_records: set[str] = set()
-        for signature, idx in check_guard_map.items():
-            cg: CheckGuardData = check_guards[idx]
-            decl_str = check_guard_declarations[signature]
-
-            all_types: list[Type] = []
-            all_type_spellings: set[str] = set()
-            for type in cg.arg_types:
-                cl.scan_types(type, all_types, all_type_spellings, False)
-            cl.scan_types(cg.result_type, all_types, all_type_spellings, False)   
-
-            for type in all_types:
-                print(f'{type.spelling}, {type.kind}')
-                if type.kind == TypeKind.RECORD:
-                    record_spelling: str = type.get_canonical().spelling
-                    if record_spelling in existing_records:
-                        continue
-                    existing_records.add(record_spelling)
-                    if record_spelling in unnamed_typedef_map:
-                        print(f'typedef {unnamed_typedef_map[record_spelling]} {record_spelling};', file=f)
-                    else:
-                        print(f'{record_spelling};', file=f)
-
-            print(f'{decl_str};', file=f)
-        check_guard_declarations_code = f.getvalue()
 
     if len(check_guard_declarations) > 0:
         with open(output_file, mode='w') as f:
-            f.writelines(check_guard_declarations_code)
-            f.write('\n\n')
             f.writelines(source_code)
             f.write('\n\n')
             f.writelines(check_guard_definitions_code)

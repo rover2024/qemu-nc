@@ -128,7 +128,7 @@ def main():
             # Generate function declaration
             decl_str = f'{return_type_spelling} {c.spelling} (' + \
                 str(', ').join([f"{cl.TypeSpelling.decl(args[i].type)} {f'_arg{i + 1}'}" for i in range(0, len(args))])
-            if type.is_function_variadic():
+            if type.kind == TypeKind.FUNCTIONPROTO and type.is_function_variadic():
                 decl_str += ', ...'
             decl_str += ')'
             print(decl_str, file=f)

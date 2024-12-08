@@ -10,6 +10,7 @@ from clang.cindex import Type
 from clang.cindex import TypeKind
 from clang.cindex import SourceRange
 from clang.cindex import SourceLocation
+from clang.cindex import TranslationUnit
 
 
 def setup():
@@ -53,6 +54,27 @@ def scan_types(type: Type, visited_types: list[Type], visited_type_spellings: se
 
 
 """
+Returns if a cursor is a statement block with a trailing semicolon.
+"""
+def is_statement_block(c: Cursor) -> bool:
+    kind: CursorKind = c.kind
+    if kind.is_statement():
+        return True
+    return False
+    # extent: SourceRange = c.extent
+    # end: SourceLocation = extent.end
+    # if not end.file:
+    #     return False
+
+    # tu: TranslationUnit = c.translation_unit
+    # tokens = list(tu.get_tokens(None, SourceRange.from_locations(end, end)))
+
+    # if len(tokens) == 0:
+    #     return False
+    # return tokens[0].spelling == ';'
+
+
+"""
 Walk through the given cursor and print in tree structure.
 """
 def traverse_cursor(c: Cursor, indent: int):
@@ -60,7 +82,7 @@ def traverse_cursor(c: Cursor, indent: int):
     start: SourceLocation = range.start
     end: SourceLocation = range.end
     referenced: str = c.referenced.spelling if c.referenced else ""
-    print(f"{' ' * indent}{c.kind}, \"{c.spelling}\", {c.type.kind}, {start.line}:{start.column}, {end.line}:{end.column}, [{referenced}]")
+    print(f"{' ' * indent}{c.kind}, \"{c.spelling}\", {c.type.kind}, {start.line}:{start.column}, {end.line}:{end.column}, [{referenced}], is_statment={is_statement_block(c)}")
     
     if indent == -1:
         traverse_cursor(list(c.get_children())[0], 4)
@@ -117,8 +139,9 @@ class TypeSpelling:
         if Typing.is_func_ptr(type):
             type_str = f'__typeof__({type.spelling})/*FP*/'
         elif Typing.is_array(type):
-            type_str = TypeSpelling.decl(type.element_type)
-            type_str += '*' if type_str[-1] == '*' else ' *'
+            type_str = f'__typeof__({type.spelling})/*ARR*/'
+            # type_str = TypeSpelling.decl(type.element_type)
+            # type_str += '*' if type_str[-1] == '*' else ' *'
         else:
             type_str = type.spelling
         return type_str
@@ -130,11 +153,13 @@ class TypeSpelling:
     @staticmethod
     def reduced(type: Type) -> str:
         type = type.get_canonical()
-        if type.kind in [ TypeKind.CHAR_U, TypeKind.UCHAR, TypeKind.CHAR_S, TypeKind.SCHAR]:
+        if type.kind in [ TypeKind.CHAR_U, TypeKind.UCHAR, TypeKind.CHAR_S, TypeKind.SCHAR ]:
             return 'char'
-        elif type.kind in [ TypeKind.INT, TypeKind.UINT ]:
+        if type.kind in [ TypeKind.USHORT, TypeKind.SHORT ]:
+            return 'short'
+        elif type.kind in [ TypeKind.INT, TypeKind.UINT, TypeKind.ENUM ]:
             return 'int'
-        elif type.kind in [ TypeKind.LONG, TypeKind.LONGLONG, TypeKind.ULONG, TypeKind.ULONGLONG]:
+        elif type.kind in [ TypeKind.LONG, TypeKind.LONGLONG, TypeKind.ULONG, TypeKind.ULONGLONG ]:
             return 'long'
         elif type.kind in [ TypeKind.POINTER, TypeKind.FUNCTIONPROTO, TypeKind.FUNCTIONNOPROTO ] or Typing.is_array(type):
             return 'void *'

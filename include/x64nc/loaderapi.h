@@ -17,7 +17,11 @@ X64NC_EXPORT void *x64nc_GetProcAddress(void *handle, const char *name);
 
 X64NC_EXPORT char *x64nc_GetErrorMessage();
 
-X64NC_EXPORT int x64nc_CallNativeProc(void *func, void *args[], void *ret);
+X64NC_EXPORT int x64nc_CallNativeProcEx(void *func, void *args[], void *ret, int convention);
+
+inline int x64nc_CallNativeProc(void *func, void *args[], void *ret) {
+    return x64nc_CallNativeProcEx(func, args, ret, 0);
+}
 
 X64NC_EXPORT void x64nc_RegisterCallThunk(const char *signature, void *func);
 

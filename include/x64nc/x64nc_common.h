@@ -25,6 +25,15 @@ enum X64NC_MAGIC_SYSCALL_RESULT {
     X64NC_Result_Success = 0,
     X64NC_Result_Callback,
     X64NC_Result_ThreadCreate,
+    X64NC_Result_ThreadExit,
+};
+
+enum X64NC_THUNK_ID {
+    X64NC_Thunk_HostExecuteCallback = 1,
+    X64NC_Thunk_HostExtraEvent,
+    X64NC_Thunk_GetHostLastThreadId,
+    X64NC_Thunk_ThreadCreate,
+    X64NC_Thunk_ThreadExit,
 };
 
 #ifdef __cplusplus

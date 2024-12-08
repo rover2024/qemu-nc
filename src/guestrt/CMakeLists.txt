@@ -8,5 +8,5 @@ target_include_directories(
     ${PROJECT_NAME} PRIVATE "${X64NC_SOURCE_DIR}/include/x64nc"
 )
 
-target_compile_options(${PROJECT_NAME} PRIVATE -fno-stack-protector -nostdlib -nodefaultlibs)
+target_compile_options(${PROJECT_NAME} PRIVATE -fno-stack-protector -nostdlib -nodefaultlibs -pthread -fPIC)
 target_compile_definitions(${PROJECT_NAME} PRIVATE X64NC_LIBRARY)
