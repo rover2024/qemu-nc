@@ -7,13 +7,15 @@
 extern "C" {
 #endif
 
-// Host Api
-X64NC_EXPORT void QEMU_NC_CallHostExecuteCallback(void *thunk, void *callback, void *args,
-                                                  void *ret);
+X64NC_EXPORT void *x64nc_GetFPExecuteCallback();
 
-X64NC_EXPORT void *QEMU_NC_GetHostExecuteCallback();
+X64NC_EXPORT void *x64nc_LookUpCallbackThunk(const char *sign);
 
-X64NC_EXPORT void *QEMU_NC_LookUpGuestThunk(const char *sign);
+X64NC_EXPORT void x64nc_HandleExtraGuestCall(int type, void *args[]);
+
+X64NC_EXPORT void *x64nc_GetTranslatorApis();
+
+X64NC_EXPORT char *x64nc_SearchLibraryH(const char *path, int mode);
 
 #ifdef __cplusplus
 }

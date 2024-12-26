@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include <dlfcn.h>
 #include <limits.h>
 
@@ -5,21 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <x64nc/loaderapi.h>
-
-#include "x64nc_shared.h"
-
-#ifndef X64NC_API_FOREACH
-#  define X64NC_API_FOREACH(X)
-#endif
-
-#define DynamicApis_LoadLibrary     x64nc_LoadLibrary
-#define DynamicApis_GetProcAddress  x64nc_GetProcAddress
-#define DynamicApis_FreeLibrary     x64nc_FreeLibrary
-#define DynamicApis_GetErrorMessage x64nc_GetErrorMessage
-
-#define DynamicApis_Name(NAME) ("my_" #NAME)
-#define DynamicApis_Category   "Guest Delegate"
+#define X64NC_GUEST_DELEGATE_SOURCE
 
 #ifdef __cplusplus
 #  include <type_traits>
@@ -31,21 +19,30 @@ static constexpr auto _R(T &&value) {
 #  define _R(X) ((void *) &X)
 #endif
 
+#include <x64nc/guestapi.h>
+#include <x64nc/x64nc_common.h>
+
+#include "x64nc_shared.h"
+
+#ifndef X64NC_API_FOREACH
+#  define X64NC_API_FOREACH(X)
+#endif
+
+#define DynamicApis_SearchLibrary(NAME) x64nc_SearchLibrary(NAME, X64NC_SL_Mode_G2D)
+#define DynamicApis_LoadLibrary         x64nc_LoadLibrary
+#define DynamicApis_GetProcAddress      x64nc_GetProcAddress
+#define DynamicApis_FreeLibrary         x64nc_FreeLibrary
+#define DynamicApis_GetErrorMessage     x64nc_GetErrorMessage
+
+#define DynamicApis_Name(NAME) ("my_" #NAME)
+#define DynamicApis_Category   "Guest Delegate"
+
 // =================================================================================================
 // Utils
-static const char *DynamicApis_GetLibraryPath(const char *filename) {
-    char *dir = getenv("X64NC_HOST_DELEGATE_LIBRARY_DIR");
-    if (!dir) {
-        fprintf(stderr, "Error: unable to get library path.\n");
-        abort();
-    }
-
-    static char result[PATH_MAX];
-    strcpy(result, dir);
-    int dir_len = strlen(dir);
-    result[dir_len] = '/';
-    strcpy(result + (dir_len + 1), filename);
-    return result;
+static const char *GetThisLibraryName() {
+    Dl_info info;
+    dladdr(GetThisLibraryName, &info);
+    return strrchr(info.dli_fname, '/') + 1;
 }
 
 static void DynamicApis_PreInitialize();
@@ -70,35 +67,40 @@ X64NC_API_FOREACH(_F)
 // Constructor and Destructor
 static void *DynamicApis_LibraryHandle = NULL;
 
-void X64NC_CONSTRUCTOR DynamicApis_Constructor() {
+static void X64NC_CONSTRUCTOR DynamicApis_Constructor() {
     DynamicApis_PreInitialize();
 
     // 1. Load library
-    void *dll = DynamicApis_LoadLibrary(
-        (DynamicApis_GetLibraryPath(X64NC_HOST_DELEGATE_LIBRARY_NAME)), RTLD_NOW);
+    const char *path = DynamicApis_SearchLibrary(GetThisLibraryName());
+    if (!path) {
+        printf(DynamicApis_Category ": Search %s failed\n", X64NC_LIBRARY_NAME);
+        abort();
+    }
+    printf("LOAD %s\n", path);
+    void *dll = DynamicApis_LoadLibrary(path, RTLD_NOW);
     if (!dll) {
-        fprintf(stderr, DynamicApis_Category ": Load %s error: %s\n",
-                X64NC_HOST_DELEGATE_LIBRARY_NAME, DynamicApis_GetErrorMessage());
+        printf(DynamicApis_Category ": Load %s error: %s\n", path, DynamicApis_GetErrorMessage());
         abort();
     }
     DynamicApis_LibraryHandle = dll;
 
     // 2. Get function addresses
-#define _F(NAME)                                                                                   \
-    {                                                                                              \
-        DynamicApis_p##NAME = (__typeof__(DynamicApis_p##NAME)) (DynamicApis_GetProcAddress(       \
-            dll, DynamicApis_Name(NAME)));                                                         \
-        if (!DynamicApis_p##NAME) {                                                                \
-            fprintf(stderr, DynamicApis_Category ": API %s cannot be resolved!\n", #NAME);         \
-            abort();                                                                               \
-        }                                                                                          \
+#define _F(NAME)                                                                                                       \
+    {                                                                                                                  \
+        DynamicApis_p##NAME =                                                                                          \
+            (__typeof__(DynamicApis_p##NAME)) (DynamicApis_GetProcAddress(dll, DynamicApis_Name(NAME)));               \
+        if (!DynamicApis_p##NAME) {                                                                                    \
+            printf(DynamicApis_Category ": API %s cannot be resolved!\n", #NAME);                                      \
+            abort();                                                                                                   \
+        }                                                                                                              \
     }
     X64NC_API_FOREACH(_F)
 #undef _F
+
     DynamicApis_PostInitialize();
 }
 
-void X64NC_DESTRUCTOR DynamicApis_Destructor() {
+static void X64NC_DESTRUCTOR DynamicApis_Destructor() {
     // Free library
     DynamicApis_FreeLibrary(DynamicApis_LibraryHandle);
 }
@@ -120,7 +122,7 @@ void X64NC_DESTRUCTOR DynamicApis_Destructor() {
 // =================================================================================================
 // Utils
 static void DynamicApis_PreInitialize() {
-#define _F(SIGNATURE, FUNC) x64nc_RegisterCallThunk(SIGNATURE, (void *) FUNC);
+#define _F(SIGNATURE, FUNC) x64nc_AddCallbackThunk(SIGNATURE, (void *) FUNC);
     X64NC_CALLBACK_FOREACH(_F)
 #undef _F
 }

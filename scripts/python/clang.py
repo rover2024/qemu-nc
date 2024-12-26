@@ -13,10 +13,6 @@ from clang.cindex import SourceLocation
 from clang.cindex import TranslationUnit
 
 
-def setup():
-    Config.set_library_file("/lib/x86_64-linux-gnu/libclang-18.so.18")
-
-
 class StringLiteral:
     extern_c = "extern \"C\""
     attribute_constructor = "__attribute__((constructor))"
@@ -128,6 +124,16 @@ class TypeSpelling:
         s = s.replace('const ', '')
         s = s.replace('volatile ', '')
         return s
+    
+
+    """
+    Replace built-in types with common spellings.
+    """
+    @staticmethod
+    def normalize_builtin(s: str) -> str:
+        s = s.replace('struct __va_list_tag[1]', 'va_list')
+        s = s.replace('struct __va_list_tag *', 'va_list')
+        return s
 
 
     """
@@ -136,6 +142,8 @@ class TypeSpelling:
     @staticmethod
     def decl(type: Type) -> str:
         type = type.get_canonical()
+        if type.spelling in ['struct __va_list_tag[1]', 'struct __va_list_tag *']:
+            return 'va_list'
         if Typing.is_func_ptr(type):
             type_str = f'__typeof__({type.spelling})/*FP*/'
         elif Typing.is_array(type):
@@ -200,3 +208,29 @@ class TypeSpelling:
                 res += ', ...'
         res += ')'
         return TypeSpelling.remove_cv(res) if reduce else res
+
+
+class CommandLine:
+    @staticmethod
+    def flag_values(cmds: list[str], flag: str) -> list[str]:
+        res:list[str] = []
+        i = 0
+        while i < len(cmds):
+            if cmds[i] == flag:
+                if i + 1 < len(cmds):
+                    res.append(cmds[i + 1])
+                    i += 2
+                    continue
+            elif cmds[i].startswith(flag):
+                res.append(cmds[i][2:])
+                i += 1
+                continue
+            i += 1
+        return res
+
+    @staticmethod
+    def include_dirs(cmds: list[str]) -> list[str]:
+        return CommandLine.flag_values(cmds, '-I')
+
+    def defnitions(cmds: list[str]) -> list[str]:
+        return CommandLine.flag_values(cmds, '-D')

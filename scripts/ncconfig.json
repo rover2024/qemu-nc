@@ -1,0 +1,18 @@
+{
+    "libclang": "/lib/x86_64-linux-gnu/libclang-18.so.18",
+    "nativeCompat": {
+        "guest": {
+            "cc": "gcc",
+            "includePath": "/home/overworld/Documents/ccxxprojs/qemu-nc/build/install/include",
+            "libraryPath": "/home/overworld/Documents/ccxxprojs/qemu-nc/build/install/lib",
+            "outputPath": "/home/overworld/Documents/ccxxprojs/qemu-nc/.cache/NC/guest"
+        },
+        "host": {
+            "cc": "gcc",
+            "arch": "x86_64",
+            "includePath": "/home/overworld/Documents/ccxxprojs/qemu-nc/build/install/include",
+            "libraryPath": "/home/overworld/Documents/ccxxprojs/qemu-nc/build/install/lib",
+            "outputPath": "/home/overworld/Documents/ccxxprojs/qemu-nc/.cache/NC/host"
+        }
+    }
+}

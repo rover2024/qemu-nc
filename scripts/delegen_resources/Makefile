@@ -1,29 +1,61 @@
-LIBNAME := @LIBRARY_NAME@
+# Variables:
+# NC_USER_LIBRARY_NAME
+# NC_USER_INCLUDE_PATHS
+# NC_USER_DEFINITIONS
+# NC_GUEST_CC
+# NC_GUEST_RUNTIME_INCLUDE_PATH
+# NC_GUEST_RUNTIME_LINK_PATH
+# NC_GUEST_OUTPUT_PATH
+# NC_HOST_CC
+# NC_HOST_RUNTIME_INCLUDE_PATH
+# NC_HOST_RUNTIME_LINK_PATH
+# NC_HOST_OUTPUT_PATH
 
-CC := gcc
+# Metadata
+LIBNAME := @NC_USER_LIBRARY_NAME@
 
-INCLUDE_DIRS := \
-	/home/overworld/Documents/ccxxprojs/qemu-nc/include
-
-LINK_DIRS := \
-	/home/overworld/Documents/ccxxprojs/qemu-nc/build/Release/lib
-
-DEFINITIONS := \
+# Guest
+GUEST_CC := @NC_GUEST_CC@
+GUEST_INCLUDE_DIRS := @NC_USER_INCLUDE_PATHS@ \
+	@NC_GUEST_RUNTIME_INCLUDE_PATH@
+GUEST_LINK_DIRS := \
+	@NC_GUEST_RUNTIME_LINK_PATH@
+GUEST_DEFINITIONS := @NC_USER_DEFINITIONS@ \
 	X64NC_LIBRARY_NAME=\"$(LIBNAME)\"
+GUEST_CFLAGS := -O2 -fPIC \
+	-fno-stack-protector -fno-exceptions -Wl,-rpath=@NC_GUEST_RUNTIME_LINK_PATH@ \
+	$(foreach item,$(GUEST_INCLUDE_DIRS),-I$(item)) \
+	$(foreach item,$(GUEST_LINK_DIRS),-L$(item)) \
+	$(foreach item,$(GUEST_DEFINITIONS),-D$(item))
+GUEST_OUTPUT_PATH := @NC_GUEST_OUTPUT_PATH@
 
-CCFLAGS := -O2 -fPIC \
+# Host
+HOST_CC := @NC_HOST_CC@
+HOST_INCLUDE_DIRS := @NC_USER_INCLUDE_PATHS@ \
+	@NC_HOST_RUNTIME_INCLUDE_PATH@
+HOST_LINK_DIRS := \
+	@NC_HOST_RUNTIME_LINK_PATH@
+HOST_DEFINITIONS := @NC_USER_DEFINITIONS@ \
+	X64NC_LIBRARY_NAME=\"$(LIBNAME)\"
+HOST_CFLAGS := -O2 -fPIC -Wl,-rpath=@NC_GUEST_RUNTIME_LINK_PATH@ \
 	-fno-stack-protector -fno-exceptions \
-	$(foreach item,$(INCLUDE_DIRS),-I$(item)) \
-	$(foreach item,$(LINK_DIRS),-L$(item)) \
-	$(foreach item,$(DEFINITIONS),-D$(item))
+	$(foreach item,$(HOST_INCLUDE_DIRS),-I$(item)) \
+	$(foreach item,$(HOST_LINK_DIRS),-L$(item)) \
+	$(foreach item,$(HOST_LINK_DIRS),-L$(item)) \
+	$(foreach item,$(HOST_DEFINITIONS),-D$(item))
+HOST_OUTPUT_PATH := @NC_HOST_OUTPUT_PATH@
 
-all: lib$(LIBNAME).so lib$(LIBNAME)_host_bridge.so
+# Project
+GUEST_TARGET := $(GUEST_OUTPUT_PATH)/lib$(LIBNAME).so
+HOST_TARGET := $(HOST_OUTPUT_PATH)/lib$(LIBNAME)_host_bridge.so
 
-lib$(LIBNAME)_host_bridge.so: x64nc_delegate_host.c
-	$(CC) -o $@ $(CCFLAGS) $< -shared -Wl,-z,defs -ldl
+all: $(GUEST_TARGET) $(HOST_TARGET)
 
-lib$(LIBNAME).so: x64nc_delegate_guest.c
-	$(CC) -o $@ $(CCFLAGS) $< -shared -Wl,-z,defs -lx64nc-guestrt
+$(GUEST_TARGET): x64nc_delegate_guest.c
+	$(GUEST_CC) -o $@ $(GUEST_CFLAGS) $< -shared -Wl,-z,defs -lx64nc-guestrt -ldl
+
+$(HOST_TARGET): x64nc_delegate_host.c
+	$(HOST_CC) -o $@ $(HOST_CFLAGS) $< -shared -Wl,-z,defs -lx64nc-hostrt -ldl
 
 clean:
-	rm lib$(LIBNAME).so lib$(LIBNAME)_host_bridge.so
+	rm $(GUEST_TARGET) $(HOST_TARGET)

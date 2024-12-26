@@ -13,6 +13,7 @@ import re
 import io
 import argparse
 import shutil
+import json
 
 from clang.cindex import Config
 from clang.cindex import Index
@@ -25,13 +26,26 @@ from clang.cindex import SourceLocation
 
 from typing import Optional
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+class Global:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    resource_dir = os.path.join(script_dir, 'delegen_resources')
+    config_path = os.path.join(script_dir, 'ncconfig.json')
+
+    guest_cc: str
+    guest_include_path: str
+    guest_library_path: str
+    guest_output_path: str
+    
+    host_cc: str
+    host_include_path: str
+    host_library_path: str
+    host_output_path: str
+
+sys.path.append(Global.script_dir)
+
 from python.text import *
 import python.clang as cl
 
-
-class Global:
-    resource_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'delegen_resources')
 
 
 def main():
@@ -43,14 +57,29 @@ def main():
     parser.add_argument('library_name', type=str, help='Library name.')
     args = parser.parse_args()
 
-    # Set the path to the clang library
-    cl.setup()
+    # Read configuration file
+    with open(Global.config_path, 'r') as file:
+        json_doc = json.load(file)
+
+        # Set the path to the clang library
+        Config.set_library_file(json_doc['libclang'])
+        Global.guest_cc = json_doc['nativeCompat']['guest']['cc']
+        Global.guest_include_path = json_doc['nativeCompat']['guest']['includePath']
+        Global.guest_library_path = json_doc['nativeCompat']['guest']['libraryPath']
+        Global.guest_output_path = json_doc['nativeCompat']['guest']['outputPath']
+        Global.host_cc = json_doc['nativeCompat']['host']['cc']
+        Global.host_include_path = json_doc['nativeCompat']['host']['includePath']
+        Global.host_library_path = json_doc['nativeCompat']['host']['libraryPath']
+        Global.host_output_path = json_doc['nativeCompat']['host']['outputPath']
 
     # Arguments
     symbols_file: str = args.symbols_file
     header_file: str = args.header_file
     library_name: str = args.library_name
     output_file_directory: str = args.o if args.o else f'{library_name}_src'
+
+    input_include_dirs = cl.CommandLine.include_dirs(args.X)
+    input_definitions = cl.CommandLine.defnitions(args.X)
     
     # Load symbols
     symbols_set = read_list_file_as_set(symbols_file)
@@ -94,7 +123,7 @@ def main():
         lines: list[str] = []
         with open(header_file, 'r') as file:
             for line in file:
-                lines.append(line.strip())
+                lines.append(line.replace('\n', ''))
         
         # Header content
         print("X64NC_EXTERN_C_BEGIN", file=f)
@@ -104,18 +133,20 @@ def main():
         print("\n", file=f)
 
         # Functions
-        f.write('#define X64NC_API_FOREACH(F)')
+        f.write('#ifndef X64NC_API_FOREACH_PRE\n#define X64NC_API_FOREACH_PRE(F)\n#endif\n')
+        f.write('#define X64NC_API_FOREACH(F) X64NC_API_FOREACH_PRE(F)')
         for spelling in functions.keys():
             f.write(f' \\\n    F({spelling})')
         f.write('\n\n')
 
         # Callbacks
-        f.write('#define X64NC_CALLBACK_FOREACH(F)')
+        f.write('#ifndef X64NC_CALLBACK_FOREACH_PRE\n#define X64NC_CALLBACK_FOREACH_PRE(F)\n#endif\n')
+        f.write('#define X64NC_CALLBACK_FOREACH(F) X64NC_CALLBACK_FOREACH_PRE(F)')
         for i in range(0, len(callback_types)):
-            f.write(f' \\\n    F(\"{cl.TypeSpelling.func_type(callback_types[i], True)}\", __QEMU_NC_CallbackThunk_{i + 1})')
+            f.write(f' \\\n    F(\"{cl.TypeSpelling.func_type(callback_types[i], True)}\", __X64NC_CallbackThunk_{i + 1})')
         f.write('\n\n')
 
-        declaration_file_content = f.getvalue()
+        declaration_file_content = cl.TypeSpelling.normalize_builtin(f.getvalue())
     
     # Generate guest file
     with io.StringIO() as f:
@@ -142,10 +173,10 @@ def main():
             
             if return_type_spelling != 'void':
                 print(f'    {return_type_spelling} _ret;', file=f)
-                print(f'    x64nc_CallNativeProc(DynamicApis_p{c.spelling}, _args, &_ret);', file=f)
+                print(f'    x64nc_CallNativeProc(DynamicApis_p{c.spelling}, _args, &_ret, 0);', file=f)
                 print(f'    return _ret;', file=f)
             else:
-                print(f'    x64nc_CallNativeProc(DynamicApis_p{c.spelling}, _args, NULL);', file=f)
+                print(f'    x64nc_CallNativeProc(DynamicApis_p{c.spelling}, _args, NULL, 0);', file=f)
 
             print('}\n', file=f)
 
@@ -162,7 +193,7 @@ def main():
             arg_types:list[Type] = list(type.argument_types())
 
             # Generate function declaration
-            print(f"static void __QEMU_NC_CallbackThunk_{i + 1}(void *_callback, void *_args[], void *_ret)", file=f)
+            print(f"static void __X64NC_CallbackThunk_{i + 1}(void *_callback, void *_args[], void *_ret)", file=f)
 
             # Generate function body
             print("{", file=f)
@@ -175,7 +206,7 @@ def main():
             print(f'    ((__typeof__({type.get_canonical().spelling}) *) _callback) ({arg_dereferenced_list_str});', file=f)
             print('}\n', file=f)
         
-        guest_delegate_file_content = f.getvalue()
+        guest_delegate_file_content = cl.TypeSpelling.normalize_builtin(f.getvalue())
     
     # Generate host file
     with io.StringIO() as f:
@@ -201,7 +232,7 @@ def main():
         print('\n', file=f)
         print('X64NC_EXTERN_C_END', file=f)
         
-        host_delegate_file_content = f.getvalue()
+        host_delegate_file_content = cl.TypeSpelling.normalize_builtin(f.getvalue())
 
     # Write files
     if not os.path.exists(output_file_directory):
@@ -226,7 +257,21 @@ def main():
             shutil.copy(file, output_file_directory)
     
     # Rewrite Makefile
-    replace_file_placeholders(os.path.join(output_file_directory, 'Makefile'), { 'LIBRARY_NAME': library_name })
+    replace_file_placeholders(os.path.join(output_file_directory, 'Makefile'),
+        { 
+            'NC_USER_LIBRARY_NAME': library_name,
+            'NC_USER_INCLUDE_PATHS': ' '.join(input_include_dirs),
+            'NC_USER_DEFINITIONS': ' '.join(input_definitions),
+            'NC_GUEST_CC': Global.guest_cc,
+            'NC_GUEST_RUNTIME_INCLUDE_PATH': Global.guest_include_path,
+            'NC_GUEST_RUNTIME_LINK_PATH': Global.guest_library_path,
+            'NC_GUEST_OUTPUT_PATH': Global.guest_output_path,
+            'NC_HOST_CC': Global.host_cc,
+            'NC_HOST_RUNTIME_INCLUDE_PATH': Global.host_include_path,
+            'NC_HOST_RUNTIME_LINK_PATH': Global.host_library_path,
+            'NC_HOST_OUTPUT_PATH': Global.host_output_path,
+        }
+    )
 
 
 if __name__ == '__main__':

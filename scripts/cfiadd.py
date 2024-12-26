@@ -8,7 +8,6 @@ import re
 import io
 import argparse
 import shutil
-import uuid
 
 from clang.cindex import Config
 from clang.cindex import Index
@@ -55,7 +54,7 @@ class CheckGuardData:
             decl_str += ", ...)"
         else:
             decl_str += ")"
-        return decl_str
+        return cl.TypeSpelling.normalize_builtin(decl_str)
 
 
 def clang_reveal_call_expr(c: Cursor) -> tuple[Optional[Cursor], Type]:
@@ -125,11 +124,13 @@ def main():
         if c.extent.start.file and not os.path.samefile(str(c.extent.start.file), source_file):
             return
         skip_children = False
-        if c.kind.is_statement():
+        # if c.kind.is_statement():
+        #     stmt = c
+        # elif c.kind.is_expression():
+        #     if parent and parent.kind == CursorKind.COMPOUND_STMT:
+        #         stmt = c
+        if c.kind == CursorKind.FUNCTION_DECL:
             stmt = c
-        elif c.kind.is_expression():
-            if parent and parent.kind == CursorKind.COMPOUND_STMT:
-                stmt = c
         if c.kind == CursorKind.CALL_EXPR:
             target_cursors.append(c)
             target_cursor_last_statements.append(stmt)
@@ -224,7 +225,8 @@ def main():
         idx = len(sorted_target_cursors) - 1 - i
         c:Cursor = sorted_target_cursors[idx]
         if sorted_target_cursors_is_statement[idx]:
-            replace_source(c.extent.start.line, c.extent.start.column, c.extent.start.line, c.extent.start.column, '\n'.join(forward_decl_stack) + '\n')
+            if len(forward_decl_stack) > 0:
+                replace_source(c.extent.start.line, c.extent.start.column, c.extent.start.line, c.extent.start.column, '\n'.join(forward_decl_stack) + '\n')
             forward_decl_stack.clear()
             continue
 
@@ -286,8 +288,7 @@ def main():
         if canonical_spelling in check_guard_map:
             name = check_guards[check_guard_map[canonical_spelling]].name
         else:
-            random_suffix = str(uuid.uuid4()).replace('-', '_')
-            name = f'__QEMU_NC_CHECK_GUARD_{len(check_guard_map) + 1}__{random_suffix}'
+            name = f'__X64NC_CHECK_GUARD_{len(check_guard_map) + 1}'
             check_guard_map[canonical_spelling] = len(check_guards)
         replace_source_range(func_ptr.extent, name)
 
@@ -303,7 +304,7 @@ def main():
         cg.type = type
         cg.no_proto_with_args = no_proto_with_args
         check_guards.append(cg)
-        forward_decl_stack.insert(0, f'extern {cg.decl()};')
+        forward_decl_stack.insert(0, f'static {cg.decl()};')
 
     # Generate CFI definitions
     check_guard_declarations: dict[str, str] = {}
@@ -319,20 +320,20 @@ def main():
         print('extern void abort (void);', file=f)
         print('#ifndef NULL\n#define NULL ((void*)0)\n#endif', file=f)
         print('\n', file=f)
-        print('extern void *QEMU_NC_GetHostExecuteCallback();', file=f)
-        print('extern void *QEMU_NC_LookUpGuestThunk(const char *);', file=f)
-        print('typedef void (*QEMU_NC_HostExecuteCallbackType)(void *, void *, void *[], void *);', file=f)
-        print('static QEMU_NC_HostExecuteCallbackType _QEMU_NC_HostExecuteCallback;', file=f)
+        print('extern void *x64nc_GetFPExecuteCallback();', file=f)
+        print('extern void *x64nc_LookUpCallbackThunk(const char *);', file=f)
+        print('typedef void (*X64NC_FP_ExecuteCallback)(void *, void *, void *[], void *);', file=f)
+        print('static X64NC_FP_ExecuteCallback _X64NC_HostExecuteCallback;', file=f)
         for _, idx in check_guard_map.items():
             cg: CheckGuardData = check_guards[idx]
             print(f'static void *{cg.name}_Thunk;', file=f)
             print(f'static const char {cg.name}_Signature[]=\"{cl.TypeSpelling.remove_cv(cg.reduced_spelling)}\";', file=f)
-        print(f'static void {cl.StringLiteral.attribute_constructor} __QEMU_NC_Initialize()', file=f)
+        print(f'static void {cl.StringLiteral.attribute_constructor} __X64NC_Initialize()', file=f)
         print('{', file=f)
-        print('    _QEMU_NC_HostExecuteCallback = (QEMU_NC_HostExecuteCallbackType) QEMU_NC_GetHostExecuteCallback();', file=f)
+        print('    _X64NC_HostExecuteCallback = (X64NC_FP_ExecuteCallback) x64nc_GetFPExecuteCallback();', file=f)
         for _, idx in check_guard_map.items():
             cg: CheckGuardData = check_guards[idx]
-            print(f'    if (!({cg.name}_Thunk = QEMU_NC_LookUpGuestThunk({cg.name}_Signature)))', file=f)
+            print(f'    if (!({cg.name}_Thunk = x64nc_LookUpCallbackThunk({cg.name}_Signature)))', file=f)
             print('    {', file=f)
             print(f'        printf(\"Host Library: Failed to get callback thunk of \\\"%s\\\"\\n\", {cg.name}_Signature);', file=f)
             print(f'        abort();', file=f)
@@ -343,22 +344,24 @@ def main():
             return_type_str = cl.TypeSpelling.decl(cg.result_type)
             decl_str = cg.decl()
             check_guard_declarations[signature] = decl_str
-            print(decl_str, file=f)
+            print(f'static {decl_str}', file=f)
 
             print("{", file=f)
-            print('    if ((long) _callback > (long) _QEMU_NC_HostExecuteCallback)', file=f)
+            print('    if ((long) _callback > (long) _X64NC_HostExecuteCallback)', file=f)
             print('    {', file=f)
             args_arrange = ", ".join(f"_arg{i + 1}" for i in range(0, len(cg.arg_types)))
             print(f'        return _callback({args_arrange});', file=f)
             print('    }', file=f)
             args_arrange = ", ".join(f"&_arg{i + 1}" for i in range(0, len(cg.arg_types)))
+            print('    {', file = f)
             print(f'    void *_args[] = {{{args_arrange}}};', file=f)
             if return_type_str != 'void':
                 print(f'    {return_type_str} _ret;', file=f)
-                print(f'    _QEMU_NC_HostExecuteCallback({cg.name}_Thunk, (void *) _callback, _args, &_ret);', file=f)
+                print(f'    _X64NC_HostExecuteCallback({cg.name}_Thunk, (void *) _callback, _args, &_ret);', file=f)
                 print('    return _ret;', file=f)
             else:
-                print(f'    _QEMU_NC_HostExecuteCallback({cg.name}_Thunk, (void *) _callback, _args, NULL);', file=f)
+                print(f'    _X64NC_HostExecuteCallback({cg.name}_Thunk, (void *) _callback, _args, NULL);', file=f)
+            print('    }', file = f)
             print('}\n', file=f)
         check_guard_definitions_code = f.getvalue()
 

@@ -18,12 +18,12 @@ static inline uint64_t syscall1(uint64_t syscall_number, void *arg) {
 
 static inline uint64_t syscall2(uint64_t syscall_number, void *arg1, void *arg2) {
     uint64_t ret;
-    __asm__ volatile("mov %1, %%rax\n" // 系统调用号放入rax
-                     "mov %2, %%rdi\n" // 第一个参数arg1放入rdi
-                     "mov %3, %%rsi\n" // 第二个参数arg2放入rsi
-                     "syscall\n"       // 执行系统调用
-                     "mov %%rax, %0"   // 系统调用返回值放入result
-                     : "=r"(ret)       // 输出操作数
+    __asm__ volatile("mov %1, %%rax\n"                           // 系统调用号放入rax
+                     "mov %2, %%rdi\n"                           // 第一个参数arg1放入rdi
+                     "mov %3, %%rsi\n"                           // 第二个参数arg2放入rsi
+                     "syscall\n"                                 // 执行系统调用
+                     "mov %%rax, %0"                             // 系统调用返回值放入result
+                     : "=r"(ret)                                 // 输出操作数
                      : "r"(syscall_number), "r"(arg1), "r"(arg2) // 输入操作数
                      : "%rax", "%rdi", "%rsi", "memory"          // 被修改寄存器列表
     );
@@ -47,8 +47,7 @@ static inline uint64_t syscall3(uint64_t syscall_number, void *arg1, void *arg2,
 }
 
 
-static inline uint64_t syscall4(uint64_t syscall_number, void *arg1, void *arg2, void *arg3,
-                                void *arg4) {
+static inline uint64_t syscall4(uint64_t syscall_number, void *arg1, void *arg2, void *arg3, void *arg4) {
     uint64_t ret;
     __asm__ volatile("mov %1, %%rax\n" // 系统调用号放入rax
                      "mov %2, %%rdi\n" // 第一个参数arg1放入rdi
@@ -58,8 +57,8 @@ static inline uint64_t syscall4(uint64_t syscall_number, void *arg1, void *arg2,
                      "syscall\n"       // 执行系统调用
                      "mov %%rax, %0"   // 系统调用返回值放入result
                      : "=r"(ret)       // 输出操作数
-                     : "r"(syscall_number), "r"((uint64_t) arg1), "r"((uint64_t) arg2),
-                       "r"((uint64_t) arg3), "r"((uint64_t) arg4)       // 输入操作数
+                     : "r"(syscall_number), "r"((uint64_t) arg1), "r"((uint64_t) arg2), "r"((uint64_t) arg3),
+                       "r"((uint64_t) arg4)                             // 输入操作数
                      : "%rax", "%rdi", "%rsi", "%rdx", "%r10", "memory" // 被修改寄存器列表
     );
     return ret;
