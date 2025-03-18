@@ -6,7 +6,7 @@ import shlex
 import sys
 import subprocess
 import os
-import multiprocessing
+import re
 
 # test_files: list[str] = [
 #     "driver/others/blas_server.c",
@@ -47,6 +47,8 @@ def main():
     compile_commands_file: str = args.compile_commands
     expand: bool = True if args.E else False
 
+    callbacks_file = callbacks_file if os.path.isabs(callbacks_file) else os.path.join(os.getcwd(), callbacks_file)
+
     with open(compile_commands_file) as f:
         json_doc = list(json.load(f))
 
@@ -69,8 +71,13 @@ def main():
         
         print(f'[{i + 1}/{all_count}] Preprocessing {source_file}')
 
+        tokens = obj['arguments'] if 'arguments' in obj else shlex.split(obj['command'])
+        # for i in range(len(tokens)):
+        #     tokens[i] = tokens[i].replace('../..', os.path.dirname(os.path.dirname(dir)))
+        #     tokens[i] = tokens[i].replace('..', os.path.dirname(dir))
+        #     tokens[i] = tokens[i].replace('-I.', '-I' + dir)
+
         i = 1
-        tokens = shlex.split(obj['command'])
         compile_options: list[str] = []
         while i < len(tokens):
             if tokens[i] == '-o':
@@ -88,7 +95,8 @@ def main():
             result = subprocess.run(
                 cmds,
                 capture_output=True,
-                text=True
+                text=True,
+                cwd=dir
             )
             print(' '.join(cmds))
             print(f'Exit code: {result.returncode}')
@@ -110,7 +118,8 @@ def main():
         result = subprocess.run(
             cmds,
             capture_output=True,
-            text=True
+            text=True,
+            cwd=dir
         )
         print(' '.join(cmds))
         print(f'Exit code: {result.returncode}')

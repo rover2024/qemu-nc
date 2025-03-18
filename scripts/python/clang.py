@@ -116,6 +116,8 @@ class Typing:
 
 
 class TypeSpelling:
+    norm_va_list = 'struct __va_list_tag *'
+
     """
     Removes 'const' and 'volatile' in spelling.
     """
@@ -131,8 +133,8 @@ class TypeSpelling:
     """
     @staticmethod
     def normalize_builtin(s: str) -> str:
-        s = s.replace('struct __va_list_tag[1]', 'va_list')
-        s = s.replace('struct __va_list_tag *', 'va_list')
+        s = s.replace('struct __va_list_tag[1]', TypeSpelling.norm_va_list)
+        s = s.replace('struct __va_list_tag *', TypeSpelling.norm_va_list)
         return s
 
 
@@ -143,7 +145,7 @@ class TypeSpelling:
     def decl(type: Type) -> str:
         type = type.get_canonical()
         if type.spelling in ['struct __va_list_tag[1]', 'struct __va_list_tag *']:
-            return 'va_list'
+            return TypeSpelling.norm_va_list
         if Typing.is_func_ptr(type):
             type_str = f'__typeof__({type.spelling})/*FP*/'
         elif Typing.is_array(type):
@@ -171,7 +173,6 @@ class TypeSpelling:
             return 'long'
         elif type.kind in [ TypeKind.POINTER, TypeKind.FUNCTIONPROTO, TypeKind.FUNCTIONNOPROTO ] or Typing.is_array(type):
             return 'void *'
-            # return 'long'
         return TypeSpelling.remove_cv(type.spelling)
     
 

@@ -6,11 +6,14 @@
 #include <cstring>
 #include <cstdlib>
 #include <fstream>
+#include <sstream>
 #include <vector>
 
 #include <link.h>
 
 #include "x64nc_common.h"
+
+#include "json11.hpp"
 
 struct X64NC_TranslatorApis {
     typedef void (*FP_ExecuteCallback)(void * /*thunk*/, void * /*callback*/, void * /*args*/, void * /*ret*/);
@@ -30,17 +33,14 @@ static inline std::string_view PathGetFileName(const std::string_view &path) {
     return path.substr(i + 1);
 }
 
-static std::vector<std::string_view> SplitString(const std::string_view &s, const std::string_view &delimiter) {
-    std::vector<std::string_view> tokens;
-    std::string::size_type start = 0;
-    std::string::size_type end = s.find(delimiter);
-    while (end != std::string::npos) {
-        tokens.push_back(s.substr(start, end - start));
-        start = end + delimiter.size();
-        end = s.find(delimiter, start);
+static void StringReplaceAll(std::string &str, const std::string &from, const std::string &to) {
+    if (from.empty())
+        return;
+    size_t start_pos = 0;
+    while ((start_pos = str.find(from, start_pos)) != std::string::npos) {
+        str.replace(start_pos, from.length(), to);
+        start_pos += to.length(); // In case 'to' contains 'from', like replacing 'x' with 'yx'
     }
-    tokens.push_back(s.substr(start));
-    return tokens;
 }
 
 static const char DefaultLibraryMappingFile[] = "/home/overworld/Documents/ccxxprojs/qemu-nc/.cache/x64nc_mappings.txt";
@@ -48,39 +48,82 @@ static const char DefaultLibraryMappingFile[] = "/home/overworld/Documents/ccxxp
 struct X64NC_HostRuntimeData {
     X64NC_TranslatorApis TranslatorApis;
     std::unordered_map<std::string, void *> CallbackThunks;
-    std::unordered_map<std::string, std::string> LibraryPathIndexes_G2D;
+
+    // mappings
     std::unordered_map<std::string, std::string> LibraryPathIndexes_G2H;
-    std::unordered_map<std::string, std::string> LibraryPathIndexes_D2G;
-    std::unordered_map<std::string, std::string> LibraryPathIndexes_D2H;
+    std::unordered_map<std::string, std::string> LibraryPathIndexes_G2N;
     std::unordered_map<std::string, std::string> LibraryPathIndexes_H2G;
-    std::unordered_map<std::string, std::string> LibraryPathIndexes_H2D;
+    std::unordered_map<std::string, std::string> LibraryPathIndexes_H2N;
+    std::unordered_map<std::string, std::string> LibraryPathIndexes_N2G;
+    std::unordered_map<std::string, std::string> LibraryPathIndexes_N2H;
+
+    void readMappingItem(const std::string &key, const json11::Json &val) {
+        if (!val.is_object()) {
+            return;
+        }
+        const auto &obj = val.object_items();
+
+        std::string pathG, pathH, pathN;
+
+        auto it = obj.find("G");
+        if (it == obj.end() || !it->second.is_string())
+            return;
+        pathG = escape_mapping_path(it->second.string_value());
+        it = obj.find("H");
+        if (it == obj.end() || !it->second.is_string())
+            return;
+        pathH = escape_mapping_path(it->second.string_value());
+        it = obj.find("N");
+        if (it == obj.end() || !it->second.is_string())
+            return;
+        pathN = escape_mapping_path(it->second.string_value());
+
+        if (!(key.size() >= 1 && key.back() == '^')) {
+            LibraryPathIndexes_G2H[std::string(PathGetFileName(pathG))] = pathH;
+            LibraryPathIndexes_G2N[std::string(PathGetFileName(pathG))] = pathN;
+            LibraryPathIndexes_H2G[std::string(PathGetFileName(pathH))] = pathG;
+            LibraryPathIndexes_H2N[std::string(PathGetFileName(pathH))] = pathN;
+        }
+        LibraryPathIndexes_N2G[std::string(PathGetFileName(pathN))] = pathG;
+        LibraryPathIndexes_N2H[std::string(PathGetFileName(pathN))] = pathH;
+    }
+
+    static std::string escape_mapping_path(std::string path) {
+        static std::string home = getenv("X64NC_HOME");
+        StringReplaceAll(path, "@", home);
+        return path;
+    }
 
     X64NC_HostRuntimeData() {
         const char *library_mapping_file = getenv("X64NC_LIBRARY_MAPPING_FILE");
-        if (library_mapping_file) {
+        if (!library_mapping_file) {
             library_mapping_file = DefaultLibraryMappingFile;
         }
         std::ifstream file(library_mapping_file);
         if (file.is_open()) {
-            std::string line;
-            while (std::getline(file, line)) {
-                if (line.empty()) {
-                    continue;
-                }
-                if (line.front() == '#') {
-                    continue;
-                }
-                auto items = SplitString(line, ":");
-                if (items.size() != 3) {
-                    continue;
-                }
+            std::stringstream ss;
+            ss << file.rdbuf();
 
-                LibraryPathIndexes_G2D[std::string(PathGetFileName(items[0]))] = items[1];
-                LibraryPathIndexes_G2H[std::string(PathGetFileName(items[0]))] = items[2];
-                LibraryPathIndexes_D2G[std::string(PathGetFileName(items[1]))] = items[0];
-                LibraryPathIndexes_D2H[std::string(PathGetFileName(items[1]))] = items[2];
-                LibraryPathIndexes_H2G[std::string(PathGetFileName(items[2]))] = items[0];
-                LibraryPathIndexes_H2D[std::string(PathGetFileName(items[2]))] = items[1];
+            std::string err;
+            auto json = json11::Json::parse(ss.str(), err);
+            if (!err.empty()) {
+                printf("nc: failed to parse library mapping file \"%s\": %s\n", library_mapping_file, err.c_str());
+                std::abort();
+            }
+
+            if (json.is_object()) {
+                const auto &objDoc = json.object_items();
+                for (const auto &item : objDoc) {
+                    readMappingItem(item.first, item.second);
+                }
+            } else if (json.is_array()) {
+                const auto &objArr = json.array_items();
+                for (const auto &item : objArr) {
+                    readMappingItem({}, item);
+                }
+            } else {
+                printf("nc: unexpected format \"%s\"\n", library_mapping_file);
+                std::abort();
             }
         } else {
             printf("nc: failed to open library mapping file \"%s\".\n", library_mapping_file);
@@ -106,14 +149,14 @@ static unsigned int host_audit_preinit(struct link_map *map, uintptr_t *cookie) 
     return 0;
 }
 
-// static int var_foo = 114514;
+static int var_foo = 114514;
 
 static uintptr_t host_audit_symbind64(Elf64_Sym *sym, unsigned int ndx, uintptr_t *refcook, uintptr_t *defcook,
                                       unsigned int *flags, const char *symname) {
-    // printf("Looking up symbol 64: %s, org: %p\n", symname, (void *) sym->st_value);
-    // if (strcmp(symname, "var_foo") == 0) {
-    //     return (uintptr_t) &var_foo;
-    // }
+    printf("Looking up symbol 64: %s, org: %p\n", symname, (void *) sym->st_value);
+    if (strcmp(symname, "var_foo") == 0) {
+        return (uintptr_t) &var_foo;
+    }
     return sym->st_value;
 }
 
@@ -165,25 +208,26 @@ void *x64nc_GetTranslatorApis() {
 }
 
 char *x64nc_SearchLibraryH(const char *path, int mode) {
-    decltype(X64NC_HostRuntimeData::LibraryPathIndexes_G2H) *indexes;
+    x64nc_debug("HRT: search library: path=\"%s\", mode=%d\n", path, mode);
+    decltype(X64NC_HostRuntimeData::LibraryPathIndexes_G2N) *indexes;
     switch (mode) {
-        case X64NC_SL_Mode_G2D:
-            indexes = &HostRuntimeData.LibraryPathIndexes_G2D;
-            break;
         case X64NC_SL_Mode_G2H:
             indexes = &HostRuntimeData.LibraryPathIndexes_G2H;
             break;
-        case X64NC_SL_Mode_D2G:
-            indexes = &HostRuntimeData.LibraryPathIndexes_D2G;
-            break;
-        case X64NC_SL_Mode_D2H:
-            indexes = &HostRuntimeData.LibraryPathIndexes_D2H;
+        case X64NC_SL_Mode_G2N:
+            indexes = &HostRuntimeData.LibraryPathIndexes_G2N;
             break;
         case X64NC_SL_Mode_H2G:
             indexes = &HostRuntimeData.LibraryPathIndexes_H2G;
             break;
-        case X64NC_SL_Mode_H2D:
-            indexes = &HostRuntimeData.LibraryPathIndexes_H2D;
+        case X64NC_SL_Mode_H2N:
+            indexes = &HostRuntimeData.LibraryPathIndexes_H2N;
+            break;
+        case X64NC_SL_Mode_N2G:
+            indexes = &HostRuntimeData.LibraryPathIndexes_N2G;
+            break;
+        case X64NC_SL_Mode_N2H:
+            indexes = &HostRuntimeData.LibraryPathIndexes_N2H;
             break;
             break;
         default:
@@ -218,6 +262,11 @@ extern "C" X64NC_EXPORT int x64nc_pthread_create(pthread_t *__restrict thread, c
     int ret;
     HostRuntimeData.TranslatorApis.NotifyPThreadCreate(thread, attr, start_routine, arg, &ret);
     *thread = HostRuntimeData.TranslatorApis.GetLastPThreadId();
+
+    // printf("%s: %lx\n", __func__, *thread);
+
+    auto self = pthread_self();
+    auto last = HostRuntimeData.TranslatorApis.GetLastPThreadId();
     return ret;
 }
 

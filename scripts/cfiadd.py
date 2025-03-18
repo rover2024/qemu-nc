@@ -8,6 +8,7 @@ import re
 import io
 import argparse
 import shutil
+import json
 
 from clang.cindex import Config
 from clang.cindex import Index
@@ -31,6 +32,9 @@ class Global:
     ignored_function_scopes: list[str] = [
         "bsearch"
     ]
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, 'ncconfig.json')
 
 
 class CheckGuardData:
@@ -103,8 +107,12 @@ def main():
     parser.add_argument('source_file', type=str, help='Source file to process.')
     args = parser.parse_args()
 
-    # Set the path to the clang library
-    cl.setup()
+    # Read configuration file
+    with open(Global.config_path, 'r') as file:
+        json_doc = json.load(file)
+
+        # Set the path to the clang library
+        Config.set_library_file(json_doc['libclang'])
 
     # Arguments
     callbacks_file: str = args.c if args.c else ''

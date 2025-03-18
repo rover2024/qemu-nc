@@ -28,7 +28,7 @@ static constexpr auto _R(T &&value) {
 #  define X64NC_API_FOREACH(X)
 #endif
 
-#define DynamicApis_SearchLibrary(NAME) x64nc_SearchLibrary(NAME, X64NC_SL_Mode_G2D)
+#define DynamicApis_SearchLibrary(NAME) x64nc_SearchLibrary(NAME, X64NC_SL_Mode_G2H)
 #define DynamicApis_LoadLibrary         x64nc_LoadLibrary
 #define DynamicApis_GetProcAddress      x64nc_GetProcAddress
 #define DynamicApis_FreeLibrary         x64nc_FreeLibrary
@@ -42,7 +42,9 @@ static constexpr auto _R(T &&value) {
 static const char *GetThisLibraryName() {
     Dl_info info;
     dladdr(GetThisLibraryName, &info);
-    return strrchr(info.dli_fname, '/') + 1;
+    static char staticRealPath[PATH_MAX];
+    realpath(info.dli_fname, staticRealPath);
+    return strrchr(staticRealPath, '/') + 1;
 }
 
 static void DynamicApis_PreInitialize();

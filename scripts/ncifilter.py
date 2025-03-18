@@ -9,8 +9,6 @@ import subprocess
 import shlex
 import pathlib
 
-from clang.cindex import Config
-
 from typing import Any, Optional
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -51,14 +49,14 @@ def process_package(pkg: str) -> Optional[PackageInfo]:
     for file in files:
         if len(file) == 0:
             continue
-        if os.path.islink(file):
-            file = os.readlink(file)
+        file = os.path.realpath(file)
         if not os.path.exists(file):
             continue
 
         ext = (''.join(pathlib.Path(file).suffixes)).lower()
+        print(f'OK: {file}, {ext}')
         if ext == '.pc':
-            cmds: list[str] = [ "pkg-config", '--libs', file, '--cflags' ]
+            cmds: list[str] = [ "pkg-config", file, '--cflags' ]
             result = subprocess.run(
                 cmds,
                 capture_output=True,
@@ -75,6 +73,7 @@ def process_package(pkg: str) -> Optional[PackageInfo]:
         elif '.so' in ext:
             if file in libs:
                 continue
+            print(file)
             libs.append(file)
     
     # Check headers
@@ -84,14 +83,15 @@ def process_package(pkg: str) -> Optional[PackageInfo]:
         result = subprocess.run(
             cmds,
             capture_output=True,
-            text=True
         )
         if result.returncode != 0:
             # print(f"Running `{' '.join(cmds)}` error:\n {result.stderr}")
+            print(f"\"{header}\": not a C source file")
             continue
         valid_headers.append(header)
     
     if len(valid_headers) == 0:
+        print(f"\"{pkg}\": not a C library")
         return None
     
     info = PackageInfo()

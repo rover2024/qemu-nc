@@ -3,16 +3,16 @@
     "nativeCompat": {
         "guest": {
             "cc": "gcc",
-            "includePath": "/home/overworld/Documents/ccxxprojs/qemu-nc/build/install/include",
-            "libraryPath": "/home/overworld/Documents/ccxxprojs/qemu-nc/build/install/lib",
-            "outputPath": "/home/overworld/Documents/ccxxprojs/qemu-nc/.cache/NC/guest"
+            "includePath": "/home/overworld/Documents/ncroot/include",
+            "libraryPath": "/home/overworld/Documents/ncroot/rt",
+            "outputPath": "/home/overworld/Documents/ncroot/lib-gd"
         },
         "host": {
             "cc": "gcc",
             "arch": "x86_64",
-            "includePath": "/home/overworld/Documents/ccxxprojs/qemu-nc/build/install/include",
-            "libraryPath": "/home/overworld/Documents/ccxxprojs/qemu-nc/build/install/lib",
-            "outputPath": "/home/overworld/Documents/ccxxprojs/qemu-nc/.cache/NC/host"
+            "includePath": "/home/overworld/Documents/ncroot/include",
+            "libraryPath": "/home/overworld/Documents/ncroot/rt",
+            "outputPath": "/home/overworld/Documents/ncroot/lib-hd"
         }
     }
 }

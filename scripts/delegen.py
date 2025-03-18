@@ -173,7 +173,9 @@ def main():
             
             if return_type_spelling != 'void':
                 print(f'    {return_type_spelling} _ret;', file=f)
+                # print(f'    printf(\"Call {c.spelling}\\n");', file=f)
                 print(f'    x64nc_CallNativeProc(DynamicApis_p{c.spelling}, _args, &_ret, 0);', file=f)
+                # print(f'    printf(\"OK\\n");', file=f)
                 print(f'    return _ret;', file=f)
             else:
                 print(f'    x64nc_CallNativeProc(DynamicApis_p{c.spelling}, _args, NULL, 0);', file=f)
@@ -191,6 +193,8 @@ def main():
             type: Type = callback_types[i]
             return_type_spelling = cl.TypeSpelling.decl(type.get_result())
             arg_types:list[Type] = list(type.argument_types())
+            args_dereferenced = [ \
+                f"*(__typeof__({cl.TypeSpelling.decl(arg_types[i])}) *) {f'_args[{i}]'}" for i in range(0, len(arg_types))]
 
             # Generate function declaration
             print(f"static void __X64NC_CallbackThunk_{i + 1}(void *_callback, void *_args[], void *_ret)", file=f)
@@ -201,9 +205,9 @@ def main():
             if return_type_spelling != 'void':
                 print(f'    *(__typeof__({return_type_spelling}) *) _ret =', file=f)
 
-            arg_dereferenced_list_str = str(', ').join([ \
-                f"*(__typeof__({cl.TypeSpelling.decl(arg_types[i])}) *) {f'_args[{i}]'}" for i in range(0, len(arg_types))])
-            print(f'    ((__typeof__({type.get_canonical().spelling}) *) _callback) ({arg_dereferenced_list_str});', file=f)
+            print(f'    ((__typeof__({type.get_canonical().spelling}) *) _callback) (', file=f)
+            print('        %s' % ',\n        '.join(args_dereferenced), file=f)
+            print('    );', file=f)
             print('}\n', file=f)
         
         guest_delegate_file_content = cl.TypeSpelling.normalize_builtin(f.getvalue())

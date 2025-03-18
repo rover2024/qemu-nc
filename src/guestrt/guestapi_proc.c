@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #include "syscall_helper.h"
 #include "x64nc_common.h"
@@ -31,6 +32,7 @@ static void *ThreadEntry(void *args) {
 
     void *ret;
     x64nc_CallNativeProc(entry, arg, &ret, X64NC_NP_Convention_ThreadEntry);
+    printf("X64NC Guest Runtime: ThreadEntry returns\n");
     return ret;
 }
 
@@ -46,7 +48,7 @@ static void NativeCallServe(void *a) {
                 CallbackThunk thunk = next_call[0];
                 void *callback = next_call[1];
                 void *args = next_call[2];
-                void *ret = next_call[2];
+                void *ret = next_call[3];
                 thunk(callback, args, ret);
                 break;
             }
@@ -95,6 +97,7 @@ static void NativeCallServe(void *a) {
 }
 
 void x64nc_CallNativeProc(void *func, void *args[], void *ret, int convention) {
+    // x64nc_debug("GRT: invoked %s, func=%p\n", __func__, func);
     void *a[] = {
         func,
         args,

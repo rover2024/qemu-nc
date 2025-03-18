@@ -1,6 +1,8 @@
 #ifndef X64NC_COMMON_H
 #define X64NC_COMMON_H
 
+#include <stdio.h>
+
 #define X64NC_MAGIC_SYSCALL_INDEX 114514
 
 enum X64NC_MAGIC_SYSCALL_TYPE {
@@ -41,12 +43,48 @@ enum X64NC_NATIVE_PROC_CONVENTION {
 };
 
 enum X64NC_SEARCH_LIBRARY_MODE {
-    X64NC_SL_Mode_G2D, // guest -> delegate
-    X64NC_SL_Mode_G2H, // guest -> host
-    X64NC_SL_Mode_D2G,
-    X64NC_SL_Mode_D2H,
+    X64NC_SL_Mode_G2H, // guest delegate -> host delegate
+    X64NC_SL_Mode_G2N, // host delegate  -> native
     X64NC_SL_Mode_H2G,
-    X64NC_SL_Mode_H2D,
+    X64NC_SL_Mode_H2N,
+    X64NC_SL_Mode_N2G,
+    X64NC_SL_Mode_N2H,
+};
+
+#if 0
+#  define x64nc_debug printf
+#else
+#  define x64nc_debug
+#endif
+
+enum X64NC_VARIADIC_PROTOCOL {
+    X64NC_VP_SCANF,
+    X64NC_VP_PRINTF,
+};
+
+enum X64NC_VARIADIC_ARGUMENT_TYPE {
+    X64NC_VA_CHAR = 1,
+    X64NC_VA_SHORT,
+    X64NC_VA_LONG,
+    X64NC_VA_LONGLONG,
+    X64NC_VA_FLOAT,
+    X64NC_VA_DOUBLE,
+    X64NC_VA_POINTER,
+};
+
+struct X64NC_VArgEntry {
+    int type;
+
+    union {
+        char c;
+        short s;
+        int i;
+        long l;
+        long long ll;
+        float f;
+        double d;
+        void *p;
+    };
 };
 
 #endif // X64NC_COMMON_H
